@@ -13,15 +13,71 @@ body {
   background-size: cover;
 }
 
-/* Hide Scrollbar */
+/* --- UTILITIES --- */
+
+/* Hide Scrollbar but allow scrolling */
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-/* Smooth animations */
+/* Glassmorphism Helpers */
+.glass-panel {
+  @apply bg-white/60 backdrop-blur-xl border border-white/50 shadow-lg;
+}
+
+/* --- ANIMATIONS --- */
+
+/* 1. Keyframes Definitions */
 @keyframes fadeIn {
-  from { opacity: 0; transform: scale(0.98); }
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes zoomIn {
+  from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
 }
-.animate-window-open {
-  animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+
+/* 2. Animation Utility Classes (Matching App.tsx usage) */
+
+.animate-in {
+  animation-duration: 0.4s;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); /* Smooth Apple-like ease */
+  animation-fill-mode: both;
+}
+
+.fade-in {
+  animation-name: fadeIn;
+}
+
+.slide-in-from-bottom-4 {
+  animation-name: slideUp;
+}
+
+.slide-in-from-right {
+  animation-name: slideInRight;
+}
+
+.zoom-in {
+  animation-name: zoomIn;
+}
+
+/* 3. Hover Transitions */
+.hover-scale {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hover-scale:hover {
+  transform: scale(1.02);
+}
+.active-press:active {
+  transform: scale(0.95);
 }
