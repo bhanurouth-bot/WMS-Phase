@@ -69,16 +69,21 @@ class InventoryViewSet(viewsets.ModelViewSet):
         
         result = InventoryService.suggest_putaway_location(sku)
         return Response(result)
-        
-    @action(detail=False, methods=['get'])
-    def suggest_location(self, request):
-        sku = request.query_params.get('sku')
-        if not sku:
-            return Response({'error': 'SKU parameter required'}, status=400)
-        
-        result = InventoryService.suggest_putaway_location(sku)
-        return Response(result)
     
+    @action(detail=False, methods=['post'])
+    def move(self, request):
+        sku = request.data.get('sku')
+        source_loc = request.data.get('source_location')
+        dest_loc = request.data.get('dest_location')
+        qty = int(request.data.get('quantity', 1))
+
+        if not all([sku, source_loc, dest_loc]):
+            return Response({'error': 'Source, Dest, and SKU required'}, status=400)
+
+        result = InventoryService.move_item(sku, source_loc, dest_loc, qty)
+        if "error" in result:
+            return Response(result, status=400)
+        return Response(result)
 
 class TransactionLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = TransactionLog.objects.all().order_by('-timestamp')
@@ -123,12 +128,9 @@ class OrderViewSet(viewsets.ModelViewSet):
     def shipping_label(self, request, pk=None):
         try:
             order = self.get_object()
-            
-            # Allow label generation if SHIPPED (or allow earlier for testing if you prefer)
             if order.status not in ['SHIPPED', 'PACKED']:
                  return Response({'error': 'Order must be PACKED or SHIPPED to generate label'}, status=400)
 
-            # Use real address data or fallbacks
             addr = order.customer_address or "No Address Provided"
             city = order.customer_city or "Unknown City"
             state = order.customer_state or "XX"
@@ -164,24 +166,9 @@ class OrderViewSet(viewsets.ModelViewSet):
             ^XZ
             """
             return HttpResponse(zpl_code.strip(), content_type="text/plain")
-            
         except Exception as e:
             return Response({'error': str(e)}, status=500)
         
-    @action(detail=False, methods=['post'])
-    def wave_plan(self, request):
-        order_ids = request.data.get('order_ids', [])
-        result = InventoryService.generate_wave_plan(order_ids)
-        if "error" in result:
-            return Response(result, status=400)
-        return Response(result)
-
-    @action(detail=False, methods=['post'])
-    def wave_complete(self, request):
-        order_ids = request.data.get('order_ids', [])
-        result = InventoryService.complete_wave(order_ids)
-        return Response(result)
-    
     @action(detail=False, methods=['post'])
     def wave_plan(self, request):
         order_ids = request.data.get('order_ids', [])
@@ -214,12 +201,12 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
     def auto_replenish(self, request):
         """
         Finds items with < 10 quantity and creates a Draft PO.
+        NOW USES SEQUENTIAL SERIAL NUMBERS (e.g. PO-00001).
         """
         low_stock_items = Inventory.objects.filter(quantity__lt=10)
         if not low_stock_items.exists():
             return Response({"message": "No low stock items found."}, status=200)
 
-        # For MVP, we just grab the first supplier or create a dummy one
         supplier, _ = Supplier.objects.get_or_create(
             name="Global Supplies Inc.", 
             defaults={"contact_email": "orders@globalsupplies.com"}
@@ -229,17 +216,37 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         for inv in low_stock_items:
             # Simple logic: Order enough to get to 50
             qty_needed = 50 - inv.quantity
-            lines.append({"sku": inv.item.sku, "qty": qty_needed})
+            lines.append({"sku": inv.item.sku, "qty": qty_needed, "received": 0})
 
-        import random
+        # --- FIXED: SEQUENTIAL PO GENERATION ---
+        # Get the count of existing POs to determine the next number
+        next_id = PurchaseOrder.objects.count() + 1
+        po_number = f"PO-{next_id:05d}" # e.g. PO-00001
+
+        # Loop to handle potential collisions with deleted records or existing random ones
+        while PurchaseOrder.objects.filter(po_number=po_number).exists():
+            next_id += 1
+            po_number = f"PO-{next_id:05d}"
+
         po = PurchaseOrder.objects.create(
             supplier=supplier,
-            po_number=f"PO-{random.randint(10000, 99999)}",
+            po_number=po_number,
             status='DRAFT',
             lines=lines
         )
 
         return Response({"message": f"Created PO {po.po_number}", "po_id": po.id})
+
+    @action(detail=True, methods=['post'])
+    def receive_item(self, request, pk=None):
+        sku = request.data.get('sku')
+        location = request.data.get('location')
+        qty = int(request.data.get('qty', 1))
+        
+        result = InventoryService.receive_po_item(pk, sku, location, qty)
+        if "error" in result:
+            return Response(result, status=400)
+        return Response(result)
 
 class RMAViewSet(viewsets.ModelViewSet):
     queryset = RMA.objects.all().order_by('-created_at')
@@ -250,7 +257,6 @@ class RMAViewSet(viewsets.ModelViewSet):
         # Allow overriding the return location (e.g., QA-01)
         location = request.data.get('location', 'RETURNS-DOCK')
         result = InventoryService.process_return_receipt(pk, location)
-        
         if "error" in result:
             return Response(result, status=400)
         return Response(result)

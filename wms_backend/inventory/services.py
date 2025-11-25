@@ -1,7 +1,8 @@
 import random
 from django.db import transaction
 from django.db.models import F
-from .models import RMA, CycleCountSession, CycleCountTask, Inventory, Item, TransactionLog, Order, OrderLine, RMALine
+# IMPORTANT: Added PurchaseOrder to imports
+from .models import RMA, CycleCountSession, CycleCountTask, Inventory, Item, TransactionLog, Order, OrderLine, RMALine, PurchaseOrder
 
 class InventoryService:
     
@@ -31,6 +32,60 @@ class InventoryService:
             )
 
             return {"success": True, "new_qty": inventory.quantity, "id": inventory.id}
+
+    # --- FIXED PO RECEIVING LOGIC ---
+    @staticmethod
+    def receive_po_item(po_id, sku, location, qty):
+        with transaction.atomic():
+            try:
+                # Use select_for_update to lock the PO row
+                po = PurchaseOrder.objects.select_for_update().get(id=po_id)
+            except PurchaseOrder.DoesNotExist:
+                return {"error": "PO not found"}
+
+            # 1. Find the line item
+            # We must clone the lines list to ensure Django detects the change
+            new_lines = list(po.lines) 
+            target_line_index = -1
+            
+            for idx, line in enumerate(new_lines):
+                if line['sku'] == sku:
+                    target_line_index = idx
+                    break
+            
+            if target_line_index == -1:
+                return {"error": "Item not in this PO"}
+
+            target_line = new_lines[target_line_index]
+
+            # 2. Update Receive Count
+            received_so_far = target_line.get('received', 0)
+            if received_so_far + qty > target_line['qty']:
+                return {"error": f"Over-receiving! Ordered: {target_line['qty']}, Received: {received_so_far}"}
+
+            # 3. Increment Physical Inventory
+            inv_res = InventoryService.receive_item(sku, location, qty)
+            if "error" in inv_res:
+                return inv_res
+
+            # 4. Update the Line Data
+            target_line['received'] = received_so_far + qty
+            new_lines[target_line_index] = target_line # Update list
+            po.lines = new_lines # Reassign to trigger dirty flag
+
+            # 5. Update Status
+            total_ordered = sum(l['qty'] for l in new_lines)
+            total_received = sum(l.get('received', 0) for l in new_lines)
+
+            if total_received >= total_ordered:
+                po.status = 'RECEIVED'
+            elif total_received > 0:
+                po.status = 'ORDERED'
+            
+            # Force save specific fields
+            po.save(update_fields=['lines', 'status'])
+
+            return {"success": True, "po_status": po.status, "line_progress": f"{target_line['received']}/{target_line['qty']}"}
 
     @staticmethod
     def pick_item(inventory_id, qty_to_pick):
@@ -165,10 +220,6 @@ class InventoryService:
 
     @staticmethod
     def pack_order(order_id):
-        """
-        Phase 2 Step: Packing.
-        Verifies items are ready to ship. Logs PACK event.
-        """
         with transaction.atomic():
             try:
                 order = Order.objects.get(id=order_id)
@@ -181,7 +232,6 @@ class InventoryService:
             order.status = 'PACKED'
             order.save()
 
-            # Log Pack Event for history visibility
             for line in order.lines.all():
                 TransactionLog.objects.create(
                     action='PACK',
@@ -194,10 +244,6 @@ class InventoryService:
 
     @staticmethod
     def ship_order(order_id):
-        """
-        Phase 2 Final Step: Shipping.
-        Finalizes the order. Logs SHIP event.
-        """
         with transaction.atomic():
             try:
                 order = Order.objects.get(id=order_id)
@@ -210,7 +256,6 @@ class InventoryService:
             order.status = 'SHIPPED'
             order.save()
             
-            # Log Ship Event for history visibility
             for line in order.lines.all():
                 TransactionLog.objects.create(
                     action='SHIP',
@@ -223,12 +268,6 @@ class InventoryService:
         
     @staticmethod
     def process_return_receipt(rma_id, location_code='RETURNS-DOCK'):
-        """
-        Phase 4: Receive RMA
-        1. Validates RMA status.
-        2. Adds stock back to inventory (defaulting to a Returns Dock).
-        3. Updates RMA status to RECEIVED.
-        """
         with transaction.atomic():
             try:
                 rma = RMA.objects.get(id=rma_id)
@@ -238,9 +277,7 @@ class InventoryService:
             if rma.status == 'RECEIVED':
                 return {"error": "RMA already processed"}
 
-            # Loop through lines and restock
             for line in rma.lines.all():
-                # Get or Create inventory record for the returns location
                 inventory, _ = Inventory.objects.select_for_update().get_or_create(
                     item=line.item,
                     location_code=location_code,
@@ -251,13 +288,11 @@ class InventoryService:
                 inventory.version += 1
                 inventory.save()
 
-                # Update Line
                 line.qty_received = line.qty_to_return
                 line.save()
 
-                # Log It
                 TransactionLog.objects.create(
-                    action='RECEIVE', # Or create a specific 'RETURN' action type
+                    action='RECEIVE',
                     sku_snapshot=line.item.sku,
                     location_snapshot=location_code,
                     quantity_change=line.qty_to_return
@@ -270,35 +305,27 @@ class InventoryService:
         
     @staticmethod
     def create_cycle_count(aisle_prefix=None, limit=10):
-        """
-        Generates a list of bins to count.
-        If aisle_prefix is set (e.g. 'A'), only selects bins in Aisle A.
-        Otherwise, selects random locations.
-        """
         with transaction.atomic():
             queryset = Inventory.objects.filter(quantity__gt=0)
             if aisle_prefix:
                 queryset = queryset.filter(location_code__startswith=aisle_prefix)
             
-            # Randomly sample inventory IDs
             all_ids = list(queryset.values_list('id', flat=True))
             if not all_ids:
                 return {"error": "No inventory found to count"}
             
             selected_ids = random.sample(all_ids, min(len(all_ids), limit))
             
-            # Create Session
             ref = f"CC-{random.randint(10000,99999)}"
             session = CycleCountSession.objects.create(reference=ref)
             
-            # Create Tasks
             tasks = []
             for inv_id in selected_ids:
                 inv = Inventory.objects.get(id=inv_id)
                 tasks.append(CycleCountTask(
                     session=session,
                     inventory=inv,
-                    expected_qty=inv.quantity # Snapshot current qty
+                    expected_qty=inv.quantity
                 ))
             
             CycleCountTask.objects.bulk_create(tasks)
@@ -306,10 +333,6 @@ class InventoryService:
 
     @staticmethod
     def submit_count(task_id, counted_qty):
-        """
-        User submits their count. 
-        If Variance != 0, we automatically adjust inventory and log it.
-        """
         with transaction.atomic():
             try:
                 task = CycleCountTask.objects.select_for_update().get(id=task_id)
@@ -321,12 +344,6 @@ class InventoryService:
 
             inventory = Inventory.objects.select_for_update().get(id=task.inventory.id)
             
-            # Calculate Variance
-            # Note: We compare against the LIVE inventory quantity, not just the snapshot, 
-            # to account for movements that happened while counting.
-            # However, for a simple WMS, comparing to snapshot (expected_qty) is standard practice 
-            # if you lock operations. Here we assume live operations continue.
-            
             current_system_qty = inventory.quantity
             variance = counted_qty - current_system_qty
             
@@ -335,7 +352,6 @@ class InventoryService:
             task.status = 'COUNTED'
             task.save()
             
-            # Auto-Adjust if needed
             if variance != 0:
                 inventory.quantity = counted_qty
                 inventory.save()
@@ -344,10 +360,9 @@ class InventoryService:
                     action='ADJUST',
                     sku_snapshot=inventory.item.sku,
                     location_snapshot=inventory.location_code,
-                    quantity_change=variance # +5 found, or -2 lost
+                    quantity_change=variance 
                 )
             
-            # Check if session is complete
             session = task.session
             if not session.tasks.filter(status='PENDING').exists():
                 session.status = 'COMPLETED'
@@ -361,36 +376,22 @@ class InventoryService:
         
     @staticmethod
     def suggest_putaway_location(sku):
-        """
-        Part 1: Directed Putaway Logic.
-        1. Check if item exists in any bin (Consolidation).
-        2. If not, suggest a default receiving zone or empty bin.
-        """
-        # 1. Try to consolidate (find bins where this SKU already exists)
         existing_locs = Inventory.objects.filter(item__sku=sku, quantity__gt=0)\
                                          .order_by('-quantity')
         
         if existing_locs.exists():
-            # Suggest the bin with the most stock to consolidate
             best_loc = existing_locs.first().location_code
             return {"suggested_location": best_loc, "reason": "Consolidate with existing stock"}
 
-        # 2. If new item, suggest a default zone (In a real app, this would find empty bins)
-        # We'll simulate a "smart" suggestion by hashing the SKU to a random aisle
-        random_aisle = sum(ord(c) for c in sku) % 5 + 1 # Aisle 1-5
-        return {"suggested_location": f"A-0{random_aisle}-01", "reason": "Empty slot in Zone A"}
-    
+        aisle_char = chr(65 + (sum(ord(c) for c in sku) % 5)) 
+        return {"suggested_location": f"ZONE-{aisle_char}-01", "reason": f"Empty slot in Zone {aisle_char}"}
+
     @staticmethod
     def generate_wave_plan(order_ids):
-        """
-        Part 2: Batch Picking (Wave Lite).
-        Aggregates items from multiple orders into a single pick path.
-        """
         orders = Order.objects.filter(id__in=order_ids, status='ALLOCATED')
         if not orders.exists():
             return {"error": "No ALLOCATED orders found for these IDs"}
 
-        # Aggregate totals by SKU
         pick_summary = {}
         
         for order in orders:
@@ -401,104 +402,18 @@ class InventoryService:
                         "sku": sku, 
                         "total_qty": 0, 
                         "orders": [],
-                        "location": "Unknown" # In a real app, calculate optimal bin here
-                    }
-                
-                pick_summary[sku]["total_qty"] += line.qty_allocated
-                pick_summary[sku]["orders"].append(order.order_number)
-                
-                # Simple logic: grab the first location we find stock in
-                # Real WMS would do pathfinding here
-                first_inv = Inventory.objects.filter(item__sku=sku, quantity__gt=0).first()
-                if first_inv:
-                    pick_summary[sku]["location"] = first_inv.location_code
-
-        return {
-            "success": True,
-            "wave_id": f"WAVE-{random.randint(1000,9999)}",
-            "pick_list": list(pick_summary.values()),
-            "order_count": orders.count()
-        }
-
-    @staticmethod
-    def complete_wave(order_ids):
-        """
-        Executes picks for all provided orders automatically.
-        (Assumes user picked everything perfectly).
-        """
-        with transaction.atomic():
-            results = []
-            for oid in order_ids:
-                # Reuse existing single-order pick logic
-                order = Order.objects.get(id=oid)
-                # Auto-pick every line
-                for line in order.lines.all():
-                    # Find where stock is reserved (simplified)
-                    inv = Inventory.objects.filter(item=line.item, quantity__gt=0).first()
-                    if inv:
-                        InventoryService.pick_order_item(oid, line.item.sku, inv.location_code, line.qty_allocated)
-                
-                results.append(f"Picked {order.order_number}")
-            
-            return {"success": True, "results": results}
-        
-    @staticmethod
-    def suggest_putaway_location(sku):
-        """
-        Part 1: Directed Putaway Logic.
-        1. Check if item exists in any bin (Consolidation).
-        2. If not, suggest a default receiving zone or empty bin.
-        """
-        # 1. Try to consolidate (find bins where this SKU already exists)
-        existing_locs = Inventory.objects.filter(item__sku=sku, quantity__gt=0)\
-                                         .order_by('-quantity')
-        
-        if existing_locs.exists():
-            # Suggest the bin with the most stock to consolidate
-            best_loc = existing_locs.first().location_code
-            return {"suggested_location": best_loc, "reason": "Consolidate with existing stock"}
-
-        # 2. If new item, suggest a default zone 
-        # (Simulation: Hash SKU to suggest a random aisle A-E)
-        # In a real app, you would query a 'Bin' model for is_empty=True
-        aisle_char = chr(65 + (sum(ord(c) for c in sku) % 5)) # A, B, C, D, E
-        return {"suggested_location": f"ZONE-{aisle_char}-01", "reason": f"Empty slot in Zone {aisle_char}"}
-
-    @staticmethod
-    def generate_wave_plan(order_ids):
-        """
-        Part 2: Batch Picking (Wave Lite).
-        Aggregates items from multiple orders into a single pick path.
-        """
-        orders = Order.objects.filter(id__in=order_ids, status='ALLOCATED')
-        if not orders.exists():
-            return {"error": "No ALLOCATED orders found for these IDs"}
-
-        # Aggregate totals by SKU
-        pick_summary = {}
-        
-        for order in orders:
-            for line in order.lines.all():
-                sku = line.item.sku
-                if sku not in pick_summary:
-                    pick_summary[sku] = {
-                        "sku": sku, 
-                        "total_qty": 0, 
-                        "orders": [],     # Order Numbers (for display)
-                        "order_ids": [],  # Order IDs (for API calls) <-- ADDED THIS
+                        "order_ids": [],
                         "location": "Unknown" 
                     }
                 
                 pick_summary[sku]["total_qty"] += line.qty_allocated
                 pick_summary[sku]["orders"].append(order.order_number)
-                pick_summary[sku]["order_ids"].append(order.id) # <-- ADDED THIS
+                pick_summary[sku]["order_ids"].append(order.id)
                 
-                # Simple logic: grab the first location we find stock in
                 first_inv = Inventory.objects.filter(item__sku=sku, quantity__gt=0).first()
                 if first_inv:
                     pick_summary[sku]["location"] = first_inv.location_code
 
-        # Sort pick list by location to optimize walking path
         sorted_pick_list = sorted(list(pick_summary.values()), key=lambda x: x['location'])
 
         return {
@@ -510,19 +425,12 @@ class InventoryService:
 
     @staticmethod
     def complete_wave(order_ids):
-        """
-        Executes picks for all provided orders automatically.
-        (Assumes user picked everything perfectly).
-        """
         with transaction.atomic():
             results = []
             for oid in order_ids:
                 try:
                     order = Order.objects.get(id=oid)
-                    # Auto-pick every line
                     for line in order.lines.all():
-                        # Find where stock is reserved 
-                        # (In a real app, we would track exactly which bin was allocated)
                         inv = Inventory.objects.filter(item=line.item, quantity__gt=0).first()
                         if inv:
                             InventoryService.pick_order_item(oid, line.item.sku, inv.location_code, line.qty_allocated)
@@ -532,3 +440,42 @@ class InventoryService:
                     results.append(f"Error picking {oid}: {str(e)}")
             
             return {"success": True, "results": results}
+        
+    @staticmethod
+    def move_item(sku, source_loc, dest_loc, qty):
+        with transaction.atomic():
+            # 1. Lock & Validate Source
+            try:
+                source_inv = Inventory.objects.select_for_update().get(
+                    item__sku=sku, location_code=source_loc
+                )
+            except Inventory.DoesNotExist:
+                return {"error": "Source inventory not found"}
+
+            if source_inv.quantity < qty:
+                return {"error": f"Not enough stock. Available: {source_inv.quantity}"}
+
+            # 2. Get or Create Destination
+            # We use the item object from the source to ensure validity
+            dest_inv, created = Inventory.objects.select_for_update().get_or_create(
+                item=source_inv.item,
+                location_code=dest_loc,
+                defaults={'quantity': 0, 'version': 0}
+            )
+
+            # 3. Execute Move
+            source_inv.quantity -= qty
+            source_inv.save()
+            
+            dest_inv.quantity += qty
+            dest_inv.save()
+
+            # 4. Log It
+            TransactionLog.objects.create(
+                action='MOVE',
+                sku_snapshot=sku,
+                location_snapshot=f"{source_loc} > {dest_loc}",
+                quantity_change=qty
+            )
+
+            return {"success": True, "message": f"Moved {qty} of {sku} from {source_loc} to {dest_loc}"}

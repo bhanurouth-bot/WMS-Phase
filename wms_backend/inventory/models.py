@@ -32,12 +32,13 @@ class TransactionLog(models.Model):
         ('ADJUST', 'Inventory Adjustment'),
         ('PACK', 'Order Packed'),
         ('SHIP', 'Order Shipped'),
+        ('MOVE', 'Internal Move'), # <--- ADDED THIS
     ]
 
     timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
     sku_snapshot = models.CharField(max_length=50)
-    location_snapshot = models.CharField(max_length=20)
+    location_snapshot = models.CharField(max_length=50) # Increased length to hold "A > B"
     quantity_change = models.IntegerField() 
 
     def __str__(self):

@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Box, Package, Activity, Search, RefreshCw, AlertCircle, Scan, 
-  History, Printer, CheckSquare, ShoppingCart, Plus, RotateCcw, 
-  Layers, Truck, LayoutDashboard, Settings, 
-  X, ChevronRight, ArrowLeft, Play, Barcode, CheckCircle2, MapPin, ArrowRightCircle,
-  Maximize
+  History, Printer, ShoppingCart, Plus, RotateCcw, 
+  Layers, LayoutDashboard, 
+  X, ChevronRight, ArrowLeft, Barcode, CheckCircle2, MapPin, ArrowRightCircle,
+  ArrowDownCircle, PackageCheck, ArrowRightLeft
 } from 'lucide-react';
 
 // --- API CONFIG ---
@@ -21,7 +21,7 @@ interface Order {
 }
 interface LogItem { id: number; timestamp: string; action: string; sku_snapshot: string; quantity_change: number; location_snapshot: string; }
 interface DashboardStats { total_stock: number; total_locations: number; low_stock: number; recent_moves: number; }
-interface PurchaseOrder { id: number; po_number: string; supplier_name: string; status: string; created_at: string; lines: {sku: string, qty: number}[]; }
+interface PurchaseOrder { id: number; po_number: string; supplier_name: string; status: string; created_at: string; lines: {sku: string, qty: number, received: number}[]; }
 interface RMA { id: number; rma_number: string; order_number: string; customer: string; status: string; lines: any[]; }
 interface CycleCountTask { id: number; item_sku: string; location: string; expected_qty: number; counted_qty: number | null; status: 'PENDING' | 'COUNTED'; variance: number | null; }
 interface CycleCountSession { id: number; reference: string; status: string; created_at: string; tasks: CycleCountTask[]; }
@@ -41,8 +41,7 @@ interface WavePlan {
 
 const MacTrafficLights = ({ onRed, onYellow, onGreen }: { onRed: () => void, onYellow: () => void, onGreen: () => void }) => (
   <div className="flex gap-2 px-4 group">
-    <button onClick={onRed} title="Go to Dashboard" className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E] shadow-sm hover:opacity-80 active:scale-90 transition-all flex items-center justify-center group-hover:text-[#4d0b09]">
-    </button>
+    <button onClick={onRed} title="Go to Dashboard" className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E] shadow-sm hover:opacity-80 active:scale-90 transition-all flex items-center justify-center group-hover:text-[#4d0b09]"></button>
     <button onClick={onYellow} title="Go Back" className="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123] shadow-sm hover:opacity-80 active:scale-90 transition-all"></button>
     <button onClick={onGreen} title="Toggle Fullscreen" className="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29] shadow-sm hover:opacity-80 active:scale-90 transition-all"></button>
   </div>
@@ -80,6 +79,7 @@ const StatusBadge = ({ status }: { status: string }) => {
     REQUESTED: 'bg-red-500/20 text-red-800 border-red-500/30',
     RECEIVED: 'bg-teal-500/20 text-teal-800 border-teal-500/30',
     DRAFT: 'bg-slate-500/20 text-slate-800 border-slate-500/30',
+    ORDERED: 'bg-blue-500/20 text-blue-800 border-blue-500/30',
   };
   return (
     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${styles[status] || 'bg-gray-200 text-gray-700'} uppercase tracking-wide`}>
@@ -88,7 +88,7 @@ const StatusBadge = ({ status }: { status: string }) => {
   );
 };
 
-// --- MODALS ---
+// --- MODALS & COMPONENTS ---
 
 const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   const imageUrl = `http://api.labelary.com/v1/printers/8dpmm/labels/4x6/0/${encodeURIComponent(zpl)}`;
@@ -208,25 +208,94 @@ const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
     )
 }
 
-// --- SCANNERS ---
+// --- UNIVERSAL SCANNER ---
 
 const UniversalScanner = ({ mode, data, onComplete, onBack, onUpdate }: any) => {
-    const [step, setStep] = useState<'LOC' | 'SKU' | 'QTY'>('LOC');
+    // Mode: CYCLE, WAVE, RECEIVE, MOVE
+    const initialStep = mode === 'RECEIVE' ? 'SKU' : mode === 'MOVE' ? 'LOC' : 'LOC';
+    const [step, setStep] = useState<'LOC' | 'SKU' | 'QTY' | 'DEST'>(initialStep);
     const [input, setInput] = useState('');
     const [activeItem, setActiveItem] = useState<any>(null);
     
-    const pendingTasks = mode === 'CYCLE' ? data.tasks.filter((t:any) => t.status === 'PENDING') : [];
-    const pendingPicks = mode === 'WAVE' ? data.pick_list.filter((p:any) => p.status !== 'PICKED') : [];
+    // For MOVE mode, we maintain temporary state for source loc/sku
+    const [moveSource, setMoveSource] = useState<string>('');
+    const [moveSku, setMoveSku] = useState<string>('');
 
-    const progress = mode === 'CYCLE' 
-        ? ((data.tasks.length - pendingTasks.length) / data.tasks.length) * 100
-        : ((data.pick_list.length - pendingPicks.length) / data.pick_list.length) * 100;
+    // Helper to get pending list (for list-based modes)
+    const getPendingList = () => {
+        if (mode === 'CYCLE') return data.tasks.filter((t:any) => t.status === 'PENDING');
+        if (mode === 'WAVE') return data.pick_list.filter((p:any) => p.status !== 'PICKED');
+        if (mode === 'RECEIVE') return data.lines.filter((l:any) => (l.received||0) < l.qty);
+        return [];
+    };
+
+    const pendingItems = getPendingList();
+    const totalItems = mode === 'CYCLE' ? data.tasks.length : mode === 'WAVE' ? data.pick_list.length : mode === 'RECEIVE' ? data.lines.length : 0;
+    const progress = totalItems > 0 ? ((totalItems - pendingItems.length) / totalItems) * 100 : 0;
 
     const handleInput = (e: React.FormEvent) => {
         e.preventDefault();
+        
+        // --- MOVE MODE (No predefined list) ---
+        if (mode === 'MOVE') {
+            if (step === 'LOC') {
+                // Source Location
+                setMoveSource(input.toUpperCase());
+                setStep('SKU');
+                setInput('');
+            } else if (step === 'SKU') {
+                // Scan SKU
+                setMoveSku(input.toUpperCase());
+                setStep('QTY');
+                setInput('');
+            } else if (step === 'QTY') {
+                // Qty to move
+                const val = parseInt(input);
+                setActiveItem({ qty: val }); // Store qty in temp object
+                setStep('DEST');
+                setInput('');
+            } else if (step === 'DEST') {
+                // Destination Bin
+                const dest = input.toUpperCase();
+                onUpdate({ sku: moveSku, source_location: moveSource, dest_location: dest, quantity: activeItem.qty });
+                // Reset
+                setMoveSource(''); setMoveSku(''); setActiveItem(null);
+                setStep('LOC'); setInput('');
+            }
+            return;
+        }
+
+        // --- OTHER MODES (List driven) ---
         if(!activeItem) return;
 
-        const targetLoc = mode === 'CYCLE' ? activeItem.location : activeItem.location;
+        // Receiving Logic (Unique Flow: SKU -> LOC -> QTY)
+        if (mode === 'RECEIVE') {
+            if (step === 'SKU') {
+                if (input.toUpperCase() === activeItem.sku) {
+                    setStep('LOC');
+                    setInput('');
+                } else { alert(`WRONG ITEM. Scan ${activeItem.sku}`); setInput(''); }
+            } else if (step === 'LOC') {
+                if(input.length > 3) { 
+                    setStep('QTY');
+                    setInput('');
+                } else { alert("Invalid Location Format"); setInput(''); }
+            } else if (step === 'QTY') {
+                const val = parseInt(input);
+                if (val > (activeItem.qty - (activeItem.received || 0))) {
+                    if(!confirm("Over-receiving? Proceed?")) return;
+                }
+                // We need to pass location back for receiving
+                onUpdate(activeItem, val, activeItem._tempLoc); 
+                setActiveItem(null);
+                setStep('SKU');
+                setInput('');
+            }
+            return;
+        }
+
+        // Standard Logic (Cycle/Wave)
+        const targetLoc = activeItem.location;
         const targetSku = mode === 'CYCLE' ? activeItem.item_sku : activeItem.sku;
         const targetQty = mode === 'CYCLE' ? null : activeItem.total_qty;
 
@@ -258,6 +327,26 @@ const UniversalScanner = ({ mode, data, onComplete, onBack, onUpdate }: any) => 
         }
     };
 
+    // Special handler to capture location for receiving
+    const handleReceivingLocInput = (val: string) => {
+        if(activeItem) activeItem._tempLoc = val; 
+    };
+
+    // Dynamic Header Title
+    const getTitle = () => {
+        if (mode === 'CYCLE') return 'Cycle Count';
+        if (mode === 'RECEIVE') return 'Inbound Receive';
+        if (mode === 'MOVE') return 'Internal Move';
+        return 'Wave Pick';
+    };
+
+    const getSubTitle = () => {
+        if (mode === 'CYCLE') return data.reference;
+        if (mode === 'RECEIVE') return data.po_number;
+        if (mode === 'WAVE') return data.wave_id;
+        return 'Ad-hoc Transfer';
+    };
+
     return (
         <div className="flex flex-col h-full bg-slate-900 text-white rounded-xl overflow-hidden relative font-sans">
              <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-blue-900/20 to-slate-900 z-0"/>
@@ -265,51 +354,67 @@ const UniversalScanner = ({ mode, data, onComplete, onBack, onUpdate }: any) => 
              <div className="relative z-10 flex justify-between items-center p-4 border-b border-white/10 bg-white/5 backdrop-blur-md">
                 <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition-colors"><ArrowLeft size={20}/></button>
                 <div className="text-center">
-                    <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">{mode === 'CYCLE' ? 'Cycle Count' : 'Wave Pick'}</div>
-                    <div className="font-mono font-bold">{mode === 'CYCLE' ? data.reference : data.wave_id}</div>
+                    <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">{getTitle()}</div>
+                    <div className="font-mono font-bold">{getSubTitle()}</div>
                 </div>
-                <div className="text-xs font-bold bg-blue-600 px-2 py-1 rounded-md">{Math.round(progress || 0)}%</div>
+                {mode !== 'MOVE' && <div className="text-xs font-bold bg-blue-600 px-2 py-1 rounded-md">{Math.round(progress || 0)}%</div>}
             </div>
 
-            {!activeItem ? (
+            {/* LIST VIEW (For Cycle, Wave, Receive) */}
+            {mode !== 'MOVE' && !activeItem ? (
                 <div className="relative z-10 flex-1 overflow-y-auto p-4 space-y-3">
-                    {(mode === 'CYCLE' ? pendingTasks : pendingPicks).length === 0 && (
+                    {pendingItems.length === 0 && (
                         <div className="h-full flex flex-col items-center justify-center text-emerald-400 animate-in zoom-in">
                             <CheckCircle2 size={64} className="mb-4 drop-shadow-[0_0_15px_rgba(52,211,153,0.5)]"/>
                             <h2 className="text-2xl font-bold">ALL DONE</h2>
                             <button onClick={onComplete} className="mt-6 bg-emerald-600 text-white px-6 py-2 rounded-full font-bold shadow-lg shadow-emerald-900/50 hover:bg-emerald-500 transition-all">Finish Job</button>
                         </div>
                     )}
-                    {(mode === 'CYCLE' ? pendingTasks : pendingPicks).map((t:any) => (
-                        <button key={t.id || t.sku} onClick={() => { setActiveItem(t); setStep('LOC'); }} 
+                    {pendingItems.map((t:any) => (
+                        <button key={t.id || t.sku} onClick={() => { setActiveItem(t); setStep(mode === 'RECEIVE' ? 'SKU' : 'LOC'); }} 
                             className="w-full bg-white/5 hover:bg-white/10 border border-white/5 p-4 rounded-xl flex justify-between items-center group transition-all duration-200 active:scale-[0.98]">
                             <div className="text-left">
-                                <div className="flex items-center gap-2 text-blue-300 font-mono text-lg font-bold">
-                                    <MapPin size={14}/> {t.location}
+                                {mode !== 'RECEIVE' && (
+                                    <div className="flex items-center gap-2 text-blue-300 font-mono text-lg font-bold">
+                                        <MapPin size={14}/> {t.location}
+                                    </div>
+                                )}
+                                <div className="text-sm text-slate-300 font-medium mt-1">
+                                    {mode === 'CYCLE' ? t.item_sku : t.sku}
+                                    {mode === 'RECEIVE' && <span className="text-xs text-slate-500 block">Expected: {t.qty - (t.received||0)}</span>}
                                 </div>
-                                <div className="text-sm text-slate-300 font-medium mt-1">{mode === 'CYCLE' ? t.item_sku : t.sku}</div>
                                 {mode === 'WAVE' && <div className="text-[10px] text-slate-500 mt-1">Orders: {t.orders.join(', ')}</div>}
                             </div>
                             <div className="flex flex-col items-end">
                                 {mode === 'WAVE' && <div className="text-2xl font-bold text-white">x{t.total_qty}</div>}
+                                {mode === 'RECEIVE' && <div className="text-xl font-bold text-white">x{t.qty}</div>}
                                 <ChevronRight className="text-slate-600 group-hover:text-white transition-colors"/>
                             </div>
                         </button>
                     ))}
                 </div>
             ) : (
+                // INPUT VIEW (For Active Item OR Move Mode)
                 <div className="relative z-10 flex-1 flex flex-col p-6 animate-in slide-in-from-right duration-300">
                     <div className="bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-white/10 p-6 rounded-2xl mb-6 text-center relative overflow-hidden">
                         <div className="absolute inset-0 bg-blue-500/10 blur-3xl"></div>
                         <div className="relative z-10">
                             <div className="text-[10px] font-bold text-blue-300 uppercase tracking-widest mb-2">
-                                {step === 'LOC' ? 'Go to Location' : step === 'SKU' ? 'Verify Item' : 'Enter Quantity'}
+                                {step === 'LOC' ? (mode==='RECEIVE'?'Scan Putaway Bin':'Go to Location') 
+                                : step === 'DEST' ? 'Scan Destination Bin'
+                                : step === 'SKU' ? 'Verify Item' 
+                                : 'Enter Quantity'}
                             </div>
                             <div className="text-5xl font-bold font-mono text-white tracking-tight mb-2 drop-shadow-md">
-                                {step === 'LOC' ? activeItem.location : step === 'QTY' ? (mode==='WAVE'?activeItem.total_qty:'?') : (mode==='CYCLE'?activeItem.item_sku:activeItem.sku)}
+                                {mode === 'MOVE' 
+                                    ? (step==='LOC'?'FROM?':step==='DEST'?'TO?':step==='SKU'?moveSource:moveSku)
+                                    : step === 'LOC' ? (mode==='RECEIVE'?'?':activeItem.location) 
+                                    : step === 'QTY' ? (mode==='WAVE'?activeItem.total_qty:'?') 
+                                    : (mode==='CYCLE'?activeItem.item_sku:activeItem.sku)
+                                }
                             </div>
                              <div className="text-sm text-slate-400">
-                                {step === 'LOC' ? 'Scan Bin Label' : step === 'SKU' ? 'Scan Product Barcode' : 'Confirm Count'}
+                                {step === 'LOC' || step === 'DEST' ? 'Scan Bin Label' : step === 'SKU' ? 'Scan Product Barcode' : 'Confirm Count'}
                              </div>
                         </div>
                     </div>
@@ -322,16 +427,19 @@ const UniversalScanner = ({ mode, data, onComplete, onBack, onUpdate }: any) => 
                             <input 
                                 autoFocus
                                 value={input} 
-                                onChange={e => setInput(e.target.value)} 
+                                onChange={e => {
+                                    setInput(e.target.value);
+                                    if(step === 'LOC' && mode === 'RECEIVE') handleReceivingLocInput(e.target.value);
+                                }} 
                                 type={step === 'QTY' ? 'number' : 'text'}
                                 className="w-full bg-black/50 border border-white/20 rounded-2xl py-6 pl-12 pr-6 text-2xl font-mono text-white placeholder-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 transition-all shadow-inner"
-                                placeholder={step === 'LOC' ? 'Scan Bin...' : step === 'SKU' ? 'Scan SKU...' : '0'} 
+                                placeholder={step === 'LOC' || step === 'DEST' ? 'Scan Bin...' : step === 'SKU' ? 'Scan SKU...' : '0'} 
                             />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
-                            <button type="button" onClick={() => {setActiveItem(null); setInput('');}} className="py-4 rounded-xl font-bold text-slate-400 hover:bg-white/5 transition-colors">Cancel</button>
+                            <button type="button" onClick={() => {setActiveItem(null); setInput(''); if(mode==='MOVE') setStep('LOC');}} className="py-4 rounded-xl font-bold text-slate-400 hover:bg-white/5 transition-colors">Cancel</button>
                             <button type="submit" className="py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/40 transition-transform active:scale-95">
-                                {step === 'QTY' ? 'CONFIRM' : 'NEXT'}
+                                {step === 'QTY' && mode !== 'MOVE' ? 'CONFIRM' : step === 'DEST' ? 'FINISH' : 'NEXT'}
                             </button>
                         </div>
                     </form>
@@ -341,12 +449,83 @@ const UniversalScanner = ({ mode, data, onComplete, onBack, onUpdate }: any) => 
     );
 };
 
+// --- PACKING STATION ---
+
+const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order, onBack:()=>void, onComplete:()=>void, onPrint:(zpl: string)=>void }) => {
+    const [packedItems, setPackedItems] = useState<Record<string, number>>({});
+    const [boxSize, setBoxSize] = useState<string>('');
+    const [input, setInput] = useState('');
+    const [isSealed, setIsSealed] = useState(false);
+
+    const totalItems = order.lines.reduce((acc, l) => acc + l.qty_picked, 0);
+    const currentPacked = Object.values(packedItems).reduce((a,b)=>a+b, 0);
+    
+    const handleScan = (e: React.FormEvent) => {
+        e.preventDefault();
+        const sku = input.toUpperCase();
+        const line = order.lines.find(l => l.item_sku === sku);
+        
+        if (line) {
+            const currentCount = packedItems[sku] || 0;
+            if (currentCount < line.qty_picked) {
+                setPackedItems(prev => ({...prev, [sku]: currentCount + 1}));
+                setInput('');
+            } else { alert("Item already fully packed!"); setInput(''); }
+        } else { alert("Wrong Item! Not in this order."); setInput(''); }
+    };
+
+    const handleSeal = async () => {
+        if (!boxSize) return alert("Select a box size first!");
+        setIsSealed(true);
+        const resPack = await fetch(`${API_URL}/orders/${order.id}/pack/`, { method: 'POST' });
+        if(!resPack.ok) return alert("Error packing");
+        const resShip = await fetch(`${API_URL}/orders/${order.id}/ship/`, { method: 'POST' });
+        if(!resShip.ok) return alert("Error shipping");
+        const resLabel = await fetch(`${API_URL}/orders/${order.id}/shipping_label/`);
+        const zpl = await resLabel.text();
+        onPrint(zpl);
+        onComplete();
+    };
+
+    return (
+        <div className="h-full flex flex-col animate-in fade-in slide-in-from-bottom-4">
+            <div className="flex justify-between items-center mb-6">
+                <div className="flex items-center gap-4">
+                    <button onClick={onBack} className="bg-white/50 p-2 rounded-xl hover:bg-white transition-colors"><ArrowLeft/></button>
+                    <div><div className="text-2xl font-bold text-slate-800 flex items-center gap-3">Packing Station <span className="text-sm font-mono bg-slate-200 px-2 py-1 rounded text-slate-600">{order.order_number}</span></div><div className="text-xs text-slate-500">{order.customer_name} · {order.customer_city}</div></div>
+                </div>
+                <div className="text-right"><div className="text-3xl font-bold text-blue-600">{currentPacked} <span className="text-lg text-slate-400">/ {totalItems}</span></div><div className="text-xs font-bold uppercase text-slate-400">Items Scanned</div></div>
+            </div>
+            <div className="flex-1 flex gap-6 overflow-hidden">
+                <div className="w-1/3 flex flex-col gap-4 overflow-y-auto pr-2">
+                    {order.lines.map(line => {
+                        const packed = packedItems[line.item_sku] || 0;
+                        const isComplete = packed === line.qty_picked;
+                        return (
+                            <div key={line.id} className={`p-4 rounded-xl border-2 transition-all ${isComplete ? 'bg-green-50 border-green-200 opacity-60' : 'bg-white border-white shadow-sm'}`}>
+                                <div className="flex justify-between items-start"><div><div className="font-bold text-slate-700">{line.item_sku}</div><div className="text-xs text-slate-500">Qty: {line.qty_picked}</div></div>{isComplete ? <CheckCircle2 className="text-green-500"/> : <div className="text-xl font-bold text-slate-300">{packed}/{line.qty_picked}</div>}</div>
+                                <div className="mt-2 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden"><div className={`h-full transition-all duration-300 ${isComplete?'bg-green-500':'bg-blue-500'}`} style={{width: `${(packed/line.qty_picked)*100}%`}}></div></div>
+                            </div>
+                        )
+                    })}
+                </div>
+                <div className="flex-1 bg-slate-100/50 rounded-3xl border border-slate-200 flex flex-col items-center justify-center relative p-8">
+                    <div className={`w-64 h-64 border-4 border-dashed rounded-2xl flex items-center justify-center mb-8 transition-all ${currentPacked===totalItems ? 'border-green-400 bg-green-50' : 'border-slate-300'}`}><PackageCheck size={64} className={currentPacked===totalItems ? 'text-green-500' : 'text-slate-300'}/></div>
+                    <form onSubmit={handleScan} className="w-full max-w-md relative z-10"><input autoFocus value={input} onChange={e=>setInput(e.target.value)} placeholder="Scan Item..." className="w-full p-4 pl-12 rounded-xl shadow-lg border-2 border-transparent focus:border-blue-500 outline-none text-lg font-mono"/><Barcode className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/></form>
+                    <div className="mt-8 grid grid-cols-3 gap-4 w-full max-w-lg">{['Small Box', 'Medium Box', 'Large Box'].map(size => (<button key={size} onClick={()=>setBoxSize(size)} className={`p-3 rounded-xl border-2 font-bold text-sm transition-all ${boxSize===size ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-white bg-white text-slate-500 hover:border-blue-200'}`}>{size}</button>))}</div>
+                </div>
+            </div>
+            <div className="mt-6 flex justify-end"><button disabled={currentPacked !== totalItems || !boxSize || isSealed} onClick={handleSeal} className="bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-4 rounded-2xl font-bold text-lg shadow-xl shadow-blue-500/30 hover:scale-[1.02] transition-all flex items-center gap-3">{isSealed ? 'Sealing...' : <><Printer/> Seal & Print Label</>}</button></div>
+        </div>
+    );
+}
+
 // --- MAIN APP ---
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('Overview');
   const [tabHistory, setTabHistory] = useState<string[]>([]);
-  const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE'>('IDLE');
+  const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE' | 'RECEIVE' | 'MOVE'>('IDLE');
   
   // Data
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -362,6 +541,8 @@ export default function App() {
   const [selectedOrders, setSelectedOrders] = useState<number[]>([]);
   const [activeWave, setActiveWave] = useState<WavePlan | null>(null);
   const [activeCount, setActiveCount] = useState<CycleCountSession | null>(null);
+  const [activePO, setActivePO] = useState<PurchaseOrder | null>(null);
+  const [packingOrder, setPackingOrder] = useState<Order | null>(null);
   
   // Modals
   const [showOrderModal, setShowOrderModal] = useState(false);
@@ -399,10 +580,12 @@ export default function App() {
       if (activeTab !== tab) {
           setTabHistory(prev => [...prev, activeTab]);
           setActiveTab(tab);
+          setPackingOrder(null);
       }
   };
 
   const handleBack = () => {
+      if(packingOrder) { setPackingOrder(null); return; }
       if (tabHistory.length > 0) {
           const prev = tabHistory[tabHistory.length - 1];
           setTabHistory(h => h.slice(0, -1));
@@ -458,7 +641,6 @@ export default function App() {
           const needed = line.qty_allocated - line.qty_picked;
           if (needed <= 0) continue;
           const toPick = Math.min(remainingQty, needed);
-          
           if (toPick > 0) {
               await fetch(`${API_URL}/orders/${orderId}/pick_item/`, {
                   method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sku: item.sku, location: item.location, qty: toPick })
@@ -467,11 +649,8 @@ export default function App() {
           }
           if (remainingQty <= 0) break;
       }
-      
       if (activeWave) {
-          const updatedList = activeWave.pick_list.map(p => 
-              p.sku === item.sku && p.location === item.location ? { ...p, status: 'PICKED' } : p
-          );
+          const updatedList = activeWave.pick_list.map(p => p.sku === item.sku && p.location === item.location ? { ...p, status: 'PICKED' } : p);
           setActiveWave({ ...activeWave, pick_list: updatedList });
       }
   };
@@ -486,6 +665,27 @@ export default function App() {
           const current = updatedCounts.find((c:any) => c.id === activeCount?.id);
           setActiveCount(current);
       }
+  };
+
+  const handleReceiveSubmit = async (item: any, qty: number, loc: string) => {
+      if(!activePO) return;
+      const res = await fetch(`${API_URL}/purchase-orders/${activePO.id}/receive_item/`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sku: item.sku, location: loc, qty: qty })
+      });
+      if(res.ok) {
+          const updatedPos = await fetch(`${API_URL}/purchase-orders/`).then(r=>r.json());
+          setPos(updatedPos);
+          const current = updatedPos.find((p:any) => p.id === activePO.id);
+          setActivePO(current);
+      }
+  };
+
+  const handleMoveSubmit = async (data: any) => {
+      const res = await fetch(`${API_URL}/inventory/move/`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+      });
+      if(res.ok) { alert("Move Successful!"); fetchAll(); } 
+      else { const err = await res.json(); alert("Error: " + err.error); }
   };
 
   const handleOrderAction = async (id: number, action: string) => {
@@ -510,6 +710,11 @@ export default function App() {
       fetchAll();
   };
 
+  const handleAutoReplenish = async () => {
+      const res = await fetch(`${API_URL}/purchase-orders/auto_replenish/`, {method: 'POST'});
+      if(res.ok) { alert((await res.json()).message); fetchAll(); }
+  };
+
   // --- RENDER ---
 
   if (scannerMode !== 'IDLE') {
@@ -523,6 +728,14 @@ export default function App() {
                   {scannerMode === 'CYCLE' && activeCount && (
                       <UniversalScanner mode="CYCLE" data={activeCount} onUpdate={(item:any, qty:number) => handleCycleCountSubmit(item.id, qty)} onBack={() => setScannerMode('IDLE')}
                         onComplete={() => { alert("Count Complete!"); setScannerMode('IDLE'); setActiveCount(null); fetchAll(); }} />
+                  )}
+                  {scannerMode === 'RECEIVE' && activePO && (
+                      <UniversalScanner mode="RECEIVE" data={activePO} onUpdate={(item:any, qty:number, loc: string) => handleReceiveSubmit(item, qty, loc)} onBack={() => setScannerMode('IDLE')}
+                        onComplete={() => { alert("Receiving Complete!"); setScannerMode('IDLE'); setActivePO(null); fetchAll(); }} />
+                  )}
+                  {scannerMode === 'MOVE' && (
+                      <UniversalScanner mode="MOVE" data={{reference:'Ad-Hoc Move'}} onUpdate={handleMoveSubmit} onBack={() => setScannerMode('IDLE')}
+                        onComplete={() => { setScannerMode('IDLE'); fetchAll(); }} />
                   )}
               </div>
           </div>
@@ -539,19 +752,55 @@ export default function App() {
         
         {/* Toolbar */}
         <div className="h-12 flex items-center justify-between px-6 bg-white/10 border-b border-black/5 shrink-0">
-            <div className="flex items-center gap-4 w-40">
-                <MacTrafficLights 
-                    onRed={() => setActiveTab('Overview')} 
-                    onYellow={handleBack} 
-                    onGreen={toggleFullscreen} 
-                />
-            </div>
+            <div className="flex items-center gap-4 w-40"><MacTrafficLights onRed={() => setActiveTab('Overview')} onYellow={handleBack} onGreen={toggleFullscreen} /></div>
             <div className="font-semibold text-sm text-slate-600/80 flex items-center gap-2"><Layers size={14} className="text-blue-600"/> NexWMS <span className="text-slate-400">v2.0</span></div>
             <div className="w-40 flex justify-end"><button onClick={fetchAll} className="p-1.5 hover:bg-black/5 rounded-md transition-colors text-slate-500"><RefreshCw size={14}/></button></div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-8 scroll-smooth">
             
+            {activeTab === 'Packing' && packingOrder ? (
+                <PackingStationUI order={packingOrder} onBack={() => setPackingOrder(null)} onComplete={() => { setPackingOrder(null); fetchAll(); }} onPrint={(zpl) => { setCurrentZpl(zpl); setShowLabel(true); }} />
+            ) : activeTab === 'Packing' && !packingOrder ? (
+                <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    <h2 className="text-2xl font-bold text-slate-800 mb-6">Packing Queue</h2>
+                    <div className="grid grid-cols-3 gap-6">
+                        {orders.filter(o => o.status === 'PICKED').length === 0 && (<div className="col-span-3 text-center py-20 text-slate-400"><PackageCheck size={64} className="mx-auto mb-4 opacity-50"/><div>No orders ready for packing.</div></div>)}
+                        {orders.filter(o => o.status === 'PICKED').map(o => (
+                            <GlassCard key={o.id} className="group hover:scale-[1.02] transition-transform cursor-pointer" >
+                                <div className="flex justify-between items-start mb-4"><div className="font-bold text-lg text-slate-700">{o.order_number}</div><div className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold">READY</div></div>
+                                <div className="text-sm text-slate-500 mb-4">{o.customer_name}<br/>{o.customer_city || 'Unknown City'}</div>
+                                <button onClick={() => setPackingOrder(o)} className="w-full bg-purple-600 text-white font-bold py-2 rounded-lg shadow-md hover:bg-purple-700 transition-colors">Start Packing</button>
+                            </GlassCard>
+                        ))}
+                    </div>
+                </div>
+            ) : null}
+
+            {activeTab === 'Moves' && (
+                <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-slate-800">Internal Moves</h2>
+                        <button onClick={()=>setScannerMode('MOVE')} className="bg-blue-600 text-white px-6 py-2 rounded-lg shadow-lg font-bold flex items-center gap-2"><ArrowRightLeft size={18}/> Start Transfer</button>
+                    </div>
+                    <GlassCard noPad className="overflow-hidden">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">Time</th><th className="p-4">Item</th><th className="p-4">From/To</th><th className="p-4 text-right">Qty</th></tr></thead>
+                            <tbody className="divide-y divide-black/5">
+                                {history.filter(h=>h.action==='MOVE').map(h => (
+                                    <tr key={h.id} className="hover:bg-blue-50/20 transition-colors">
+                                        <td className="p-4 font-mono text-xs text-slate-500">{new Date(h.timestamp).toLocaleString()}</td>
+                                        <td className="p-4 font-medium">{h.sku_snapshot}</td>
+                                        <td className="p-4 font-mono text-xs">{h.location_snapshot}</td>
+                                        <td className="p-4 text-right font-bold">{h.quantity_change}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </GlassCard>
+                </div>
+            )}
+
             {activeTab === 'Overview' && (
                 <div className="space-y-8 max-w-5xl mx-auto">
                     <div className="grid grid-cols-4 gap-6">
@@ -564,10 +813,7 @@ export default function App() {
                     </div>
                     <div className="grid grid-cols-3 gap-6">
                         <GlassCard className="col-span-2 min-h-[300px]" noPad>
-                            <div className="p-4 border-b border-black/5 font-bold text-slate-600 text-sm flex justify-between items-center">
-                                <span>Recent Activity</span>
-                                <button onClick={() => navigate('History')} className="text-xs bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded text-slate-600 transition-colors flex items-center gap-1">Full History <ArrowRightCircle size={12}/></button>
-                            </div>
+                            <div className="p-4 border-b border-black/5 font-bold text-slate-600 text-sm flex justify-between items-center"><span>Recent Activity</span><button onClick={() => navigate('History')} className="text-xs bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded text-slate-600 transition-colors flex items-center gap-1">Full History <ArrowRightCircle size={12}/></button></div>
                             <div className="divide-y divide-black/5">
                                 {history.slice(0, 5).map(h => (
                                     <div key={h.id} className="p-3 px-4 flex justify-between items-center text-sm hover:bg-white/40 transition-colors">
@@ -589,25 +835,17 @@ export default function App() {
 
             {activeTab === 'Orders' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-2xl font-bold text-slate-800">Sales Orders</h2>
-                        <button onClick={() => setShowOrderModal(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2">
-                            <Plus size={16}/> New Order
-                        </button>
-                    </div>
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800">Sales Orders</h2><button onClick={() => setShowOrderModal(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2"><Plus size={16}/> New Order</button></div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">Order #</th><th className="p-4">Customer</th><th className="p-4">Status</th><th className="p-4 text-right">Items</th><th className="p-4 text-right">Actions</th></tr></thead>
                             <tbody className="divide-y divide-black/5">
                                 {orders.map(o => (
                                     <tr key={o.id} className="hover:bg-blue-50/20 transition-colors">
-                                        <td className="p-4 font-bold text-slate-700">{o.order_number}</td>
-                                        <td className="p-4">{o.customer_name}</td>
-                                        <td className="p-4"><StatusBadge status={o.status}/></td>
-                                        <td className="p-4 text-right font-mono text-slate-500">{o.lines.length}</td>
+                                        <td className="p-4 font-bold text-slate-700">{o.order_number}</td><td className="p-4">{o.customer_name}</td><td className="p-4"><StatusBadge status={o.status}/></td><td className="p-4 text-right font-mono text-slate-500">{o.lines.length}</td>
                                         <td className="p-4 text-right space-x-2">
                                             {o.status === 'PENDING' && <button onClick={()=>handleOrderAction(o.id, 'allocate')} className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">Allocate</button>}
-                                            {o.status === 'PICKED' && <button onClick={()=>handleOrderAction(o.id, 'pack')} className="text-xs bg-orange-500 text-white px-3 py-1 rounded hover:bg-orange-600">Pack</button>}
+                                            {o.status === 'PICKED' && <button onClick={()=>navigate('Packing')} className="text-xs bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">Pack</button>}
                                             {o.status === 'PACKED' && <button onClick={()=>handleOrderAction(o.id, 'ship')} className="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700">Ship</button>}
                                             {o.status === 'SHIPPED' && <button onClick={()=>handleGenerateLabel(o.id)} className="text-xs bg-slate-800 text-white px-3 py-1 rounded hover:bg-black">Label</button>}
                                         </td>
@@ -619,27 +857,32 @@ export default function App() {
                 </div>
             )}
 
+            {activeTab === 'Receiving' && (
+                <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800">Inbound Receiving</h2><button onClick={handleAutoReplenish} className="bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2"><RefreshCw size={16}/> Auto-Replenish</button></div>
+                    <div className="grid grid-cols-2 gap-6">
+                        {pos.map(p => (
+                            <GlassCard key={p.id} className="hover:scale-[1.01] transition-transform">
+                                <div className="flex justify-between items-start mb-4"><div><div className="font-bold text-lg text-slate-700">{p.po_number}</div><div className="text-xs text-slate-500">{p.supplier_name}</div></div><StatusBadge status={p.status}/></div>
+                                <div className="space-y-2 mb-6"><div className="flex justify-between text-xs font-bold text-slate-500 uppercase"><span>Progress</span><span>{Math.round((p.lines.reduce((a,b)=>a+(b.received||0),0) / p.lines.reduce((a,b)=>a+b.qty,0)) * 100) || 0}%</span></div><div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-blue-500 transition-all duration-500" style={{width: `${(p.lines.reduce((a,b)=>a+(b.received||0),0) / p.lines.reduce((a,b)=>a+b.qty,0)) * 100}%`}}></div></div></div>
+                                {p.status !== 'RECEIVED' && <button onClick={()=>{setActivePO(p); setScannerMode('RECEIVE')}} className="w-full bg-blue-600 text-white font-bold py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"><Scan size={16}/> Start Receiving</button>}
+                            </GlassCard>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {activeTab === 'Returns' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-2xl font-bold text-slate-800">Returns (RMA)</h2>
-                        <button onClick={() => setShowRMAModal(true)} className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-red-600 transition-all flex items-center gap-2">
-                            <RotateCcw size={16}/> New Return
-                        </button>
-                    </div>
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800">Returns (RMA)</h2><button onClick={() => setShowRMAModal(true)} className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-red-600 transition-all flex items-center gap-2"><RotateCcw size={16}/> New Return</button></div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
                             <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">RMA #</th><th className="p-4">Original Order</th><th className="p-4">Customer</th><th className="p-4">Status</th><th className="p-4 text-right">Actions</th></tr></thead>
                             <tbody className="divide-y divide-black/5">
                                 {rmas.map(r => (
                                     <tr key={r.id} className="hover:bg-red-50/20 transition-colors">
-                                        <td className="p-4 font-bold text-slate-700">{r.rma_number}</td>
-                                        <td className="p-4 font-mono text-xs">{r.order_number}</td>
-                                        <td className="p-4">{r.customer}</td>
-                                        <td className="p-4"><StatusBadge status={r.status}/></td>
-                                        <td className="p-4 text-right">
-                                            {r.status === 'REQUESTED' && <button onClick={()=>handleReceiveRMA(r.id)} className="text-xs bg-slate-800 text-white px-3 py-1 rounded hover:bg-black">Receive</button>}
-                                        </td>
+                                        <td className="p-4 font-bold text-slate-700">{r.rma_number}</td><td className="p-4 font-mono text-xs">{r.order_number}</td><td className="p-4">{r.customer}</td><td className="p-4"><StatusBadge status={r.status}/></td>
+                                        <td className="p-4 text-right">{r.status === 'REQUESTED' && <button onClick={()=>handleReceiveRMA(r.id)} className="text-xs bg-slate-800 text-white px-3 py-1 rounded hover:bg-black">Receive</button>}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -670,63 +913,6 @@ export default function App() {
                 </div>
             )}
 
-            {activeTab === 'Waves' && (
-                <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    {!activeWave ? (
-                        <>
-                            <div className="flex justify-between items-center mb-6">
-                                <div><h2 className="text-2xl font-bold text-slate-800">Wave Planning</h2><p className="text-slate-500 text-sm">Select orders to batch pick.</p></div>
-                                <button disabled={selectedOrders.length===0} onClick={handleGenerateWave} className="bg-blue-600 disabled:opacity-50 text-white px-6 py-2 rounded-xl font-bold shadow-lg transition-transform active:scale-95">Generate Wave</button>
-                            </div>
-                            <div className="grid grid-cols-3 gap-4">
-                                {orders.filter(o=>o.status==='ALLOCATED').map(o => (
-                                    <div key={o.id} onClick={()=>setSelectedOrders(prev => prev.includes(o.id)?prev.filter(i=>i!==o.id):[...prev, o.id])} 
-                                        className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${selectedOrders.includes(o.id)?'bg-blue-50 border-blue-500 shadow-md':'bg-white/40 border-transparent hover:bg-white/60'}`}>
-                                        <div className="flex justify-between mb-2"><span className="font-bold text-slate-700">{o.order_number}</span>{selectedOrders.includes(o.id)&&<CheckCircle2 size={16} className="text-blue-500"/>}</div>
-                                        <div className="text-xs text-slate-500">{o.lines.length} Lines · {o.customer_name}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        </>
-                    ) : (
-                        <div className="max-w-3xl mx-auto">
-                             <div className="flex justify-between items-center mb-6">
-                                <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2"><Layers className="text-purple-600"/> {activeWave.wave_id}</h2>
-                                <button onClick={()=>setActiveWave(null)} className="text-slate-400 hover:text-slate-600"><X/></button>
-                            </div>
-                            <GlassCard className="p-0 overflow-hidden mb-6">
-                                <div className="bg-slate-50/50 p-4 border-b border-black/5 flex justify-between items-center">
-                                    <span className="text-xs font-bold uppercase text-slate-500">Pick Path</span>
-                                    <span className="text-xs font-mono bg-slate-200 px-2 py-0.5 rounded text-slate-600">{activeWave.pick_list.length} SKUs</span>
-                                </div>
-                                <div className="divide-y divide-black/5">
-                                    {activeWave.pick_list.map((item, i) => (
-                                        <div key={i} className="p-4 flex items-center justify-between">
-                                            <div className="flex items-center gap-4">
-                                                <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center font-bold text-slate-500 text-xs">{i+1}</div>
-                                                <div>
-                                                    <div className="font-bold text-slate-700">{item.sku}</div>
-                                                    <div className="text-xs text-slate-500">Loc: <span className="bg-yellow-100 text-yellow-800 px-1 rounded font-mono">{item.location}</span></div>
-                                                </div>
-                                            </div>
-                                            <div className="text-right">
-                                                <div className="text-xl font-bold text-slate-800">x{item.total_qty}</div>
-                                                <div className="text-[10px] text-slate-400">Status: {item.status || 'PENDING'}</div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                                <div className="p-4 bg-slate-50 border-t border-slate-200">
-                                    <button onClick={()=>setScannerMode('WAVE')} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl shadow-lg transition-transform active:scale-95 flex justify-center items-center gap-2">
-                                        <Scan size={18}/> Start Scanning
-                                    </button>
-                                </div>
-                            </GlassCard>
-                        </div>
-                    )}
-                </div>
-            )}
-            
             {activeTab === 'Inventory' && (
                 <div className="max-w-6xl mx-auto">
                     <h2 className="text-2xl font-bold text-slate-800 mb-6">Inventory</h2>
@@ -743,17 +929,16 @@ export default function App() {
 
             {activeTab === 'Scanner' && (
                 <div className="max-w-4xl mx-auto grid grid-cols-2 gap-6">
-                    <button disabled className="bg-white/40 border border-white/40 p-8 rounded-2xl flex flex-col items-center gap-4 text-slate-400 cursor-not-allowed">
-                        <Scan size={48}/>
-                        <div className="font-bold">Wave Picking</div>
-                        <div className="text-xs">Go to "Waves" tab to start a job</div>
+                    <button onClick={()=>setScannerMode('MOVE')} className="bg-white/40 border border-white/40 p-8 rounded-2xl flex flex-col items-center gap-4 text-slate-600 hover:bg-white/60 transition-colors">
+                        <ArrowRightLeft size={48}/>
+                        <div className="font-bold">Internal Transfer</div>
+                        <div className="text-xs text-slate-500">Move items between bins</div>
                     </button>
                     <div className="space-y-4">
                         <h3 className="font-bold text-slate-600 px-1">Cycle Counts</h3>
                         {counts.map(c => (
                             <button key={c.id} onClick={()=>{setActiveCount(c); setScannerMode('CYCLE');}} className="w-full bg-white/60 hover:bg-white p-4 rounded-xl flex justify-between items-center shadow-sm hover:shadow-md transition-all">
-                                <div><div className="font-bold text-slate-700 font-mono">{c.reference}</div><StatusBadge status={c.status}/></div>
-                                <ChevronRight className="text-slate-400"/>
+                                <div><div className="font-bold text-slate-700 font-mono">{c.reference}</div><StatusBadge status={c.status}/></div><ChevronRight className="text-slate-400"/>
                             </button>
                         ))}
                     </div>
@@ -767,6 +952,9 @@ export default function App() {
              <DockItem icon={LayoutDashboard} label="Overview" active={activeTab==='Overview'} onClick={()=>navigate('Overview')} />
              <DockItem icon={Box} label="Inventory" active={activeTab==='Inventory'} onClick={()=>navigate('Inventory')} />
              <DockItem icon={Layers} label="Waves" active={activeTab==='Waves'} onClick={()=>navigate('Waves')} />
+             <DockItem icon={ArrowDownCircle} label="Receiving" active={activeTab==='Receiving'} onClick={()=>navigate('Receiving')} />
+             <DockItem icon={ArrowRightLeft} label="Moves" active={activeTab==='Moves'} onClick={()=>navigate('Moves')} />
+             <DockItem icon={PackageCheck} label="Packing" active={activeTab==='Packing'} onClick={()=>navigate('Packing')} />
              <DockItem icon={ShoppingCart} label="Orders" active={activeTab==='Orders'} onClick={()=>navigate('Orders')} />
              <DockItem icon={RotateCcw} label="Returns" active={activeTab==='Returns'} onClick={()=>navigate('Returns')} />
              <div className="w-px h-10 bg-black/10 mx-2"></div>
