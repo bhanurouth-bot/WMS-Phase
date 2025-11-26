@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.http import HttpResponse
+from django.http import HttpResponse, FileResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, Count, F
 from rest_framework.decorators import api_view, permission_classes
@@ -34,15 +34,16 @@ class InventoryViewSet(viewsets.ModelViewSet):
         location = request.data.get('location')
         qty = int(request.data.get('quantity', 1))
         
-        # --- NEW FIELDS ---
         lot_number = request.data.get('lot_number')
-        expiry_date = request.data.get('expiry_date') # Format: YYYY-MM-DD
+        expiry_date = request.data.get('expiry_date')
+        # --- NEW: Capture status ---
+        inv_status = request.data.get('status', 'AVAILABLE') 
 
         if not all([sku, location]):
             return Response({'error': 'SKU and Location required'}, status=400)
 
-        # Pass new fields to service
-        result = InventoryService.receive_item(sku, location, qty, lot_number, expiry_date)
+        # --- Pass status to service ---
+        result = InventoryService.receive_item(sku, location, qty, lot_number, expiry_date, inv_status)
         
         if "error" in result:
             return Response(result, status=400)
@@ -117,9 +118,8 @@ class OrderViewSet(viewsets.ModelViewSet):
         sku = request.data.get('sku')
         location = request.data.get('location')
         qty = int(request.data.get('qty', 1))
-        lot_number = request.data.get('lot_number') # <--- Add this
+        lot_number = request.data.get('lot_number') 
 
-        # Pass lot_number to the service
         result = InventoryService.pick_order_item(pk, sku, location, qty, lot_number)
         
         if "error" in result:
@@ -216,6 +216,18 @@ class OrderViewSet(viewsets.ModelViewSet):
             return Response(result, status=400)
         return Response(result)
     
+    @action(detail=True, methods=['get'])
+    def packing_slip(self, request, pk=None):
+        pdf_buffer = InventoryService.generate_packing_slip_pdf(pk)
+        if not pdf_buffer:
+            return Response({'error': 'Order not found'}, status=404)
+        
+        return FileResponse(
+            pdf_buffer, 
+            as_attachment=True, 
+            filename=f"packing_slip_{pk}.pdf"
+        )
+    
     
 
 
@@ -244,16 +256,13 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
 
         lines = []
         for inv in low_stock_items:
-            # Simple logic: Order enough to get to 50
             qty_needed = 50 - inv.quantity
             lines.append({"sku": inv.item.sku, "qty": qty_needed, "received": 0})
 
         # --- FIXED: SEQUENTIAL PO GENERATION ---
-        # Get the count of existing POs to determine the next number
         next_id = PurchaseOrder.objects.count() + 1
         po_number = f"PO-{next_id:05d}" # e.g. PO-00001
 
-        # Loop to handle potential collisions with deleted records or existing random ones
         while PurchaseOrder.objects.filter(po_number=po_number).exists():
             next_id += 1
             po_number = f"PO-{next_id:05d}"
@@ -275,7 +284,6 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         lot_number = request.data.get('lot_number')
         expiry_date = request.data.get('expiry_date')
 
-        # --- FIX: Validation Check ---
         if not location:
             return Response({'error': 'Location is required. Scan a bin.'}, status=400)
         if not sku:

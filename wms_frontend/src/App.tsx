@@ -5,16 +5,29 @@ import {
   Layers, LayoutDashboard, 
   X, ChevronRight, ArrowLeft, Barcode, CheckCircle2, MapPin, ArrowRightCircle,
   ArrowDownCircle, PackageCheck, ArrowRightLeft, ClipboardList, Settings2, Play,
-  Grid, Trash2, Map as MapIcon, Download, CalendarClock
+  Grid, Trash2, Map as MapIcon, Download, CalendarClock, QrCode, LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useScanDetection } from './hooks/useScanDetection';
+import Login from './Login';
+import MobilePicker from './MobilePicker';
 
 // --- API CONFIG ---
 const API_URL = 'http://127.0.0.1:8000/api';
 
 // --- TYPES ---
-interface InventoryItem { id: number; item_sku: string; item_name: string; location_code: string; quantity: number; available_quantity: number; reserved_quantity: number; lot_number?: string; expiry_date?: string; }
+interface InventoryItem { 
+  id: number; 
+  item_sku: string; 
+  item_name: string; 
+  location_code: string; 
+  quantity: number; 
+  available_quantity: number; 
+  reserved_quantity: number; 
+  lot_number?: string; 
+  expiry_date?: string; 
+  status: 'AVAILABLE' | 'DAMAGED' | 'QUARANTINE';
+}
 interface ItemMaster { id: number; sku: string; name: string; }
 interface LocationMaster { id: number; location_code: string; location_type: string; zone: string; x: number; y: number; }
 interface OrderLine { id: number; item: number; item_sku: string; qty_ordered: number; qty_allocated: number; qty_picked: number; }
@@ -37,7 +50,7 @@ interface BinConfig { id: number; location_code: string; item_sku: string; min_q
 
 const MacTrafficLights = ({ onRed, onYellow, onGreen }: { onRed: () => void, onYellow: () => void, onGreen: () => void }) => (
   <div className="flex gap-2 px-4 group">
-    <button onClick={onRed} title="Go to Dashboard" className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E] shadow-sm hover:opacity-80 active:scale-90 transition-all flex items-center justify-center group-hover:text-[#4d0b09]"></button>
+    <button onClick={onRed} title="Logout" className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E] shadow-sm hover:opacity-80 active:scale-90 transition-all flex items-center justify-center group-hover:text-[#4d0b09]"></button>
     <button onClick={onYellow} title="Go Back" className="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123] shadow-sm hover:opacity-80 active:scale-90 transition-all"></button>
     <button onClick={onGreen} title="Toggle Fullscreen" className="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29] shadow-sm hover:opacity-80 active:scale-90 transition-all"></button>
   </div>
@@ -105,18 +118,16 @@ const WarehouseMap = ({ locations, inventory, activeZone, onBinClick, targetLoca
         return activeZone === 'All' || l.zone === activeZone;
     });
 
-    // --- NEW: DYNAMIC SIZING ---
-    // Calculate the maximum X and Y coordinates to auto-size the grid
-    const maxX = Math.max(...filteredLocations.map((l:any) => l.x || 0), 20); // Min width 20 units
-    const maxY = Math.max(...filteredLocations.map((l:any) => l.y || 0), 15); // Min height 15 units
+    // --- DYNAMIC SIZING ---
+    const maxX = Math.max(...filteredLocations.map((l:any) => l.x || 0), 20); 
+    const maxY = Math.max(...filteredLocations.map((l:any) => l.y || 0), 15); 
     
-    const gridWidth = (maxX + 2) * 40; // +2 for padding
+    const gridWidth = (maxX + 2) * 40; 
     const gridHeight = (maxY + 2) * 40;
 
     return (
         <div className="relative w-full h-full bg-slate-50/50 overflow-hidden border-slate-200 rounded-xl">
             <div className="absolute inset-0 p-8 overflow-auto macos-scrollbar flex items-start justify-start">
-                {/* Dynamic Grid Container */}
                 <div 
                     className="relative bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:40px_40px] border border-slate-200/50 rounded-lg shadow-inner transition-all duration-500"
                     style={{ width: `${gridWidth}px`, height: `${gridHeight}px` }}
@@ -190,6 +201,7 @@ const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   );
 };
 
+// [MODIFIED] QuickReceiveModal now includes Status selection & SERIAL NUMBERS
 const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -199,7 +211,10 @@ const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
             location: (form.elements.namedItem('location') as HTMLSelectElement).value,
             quantity: parseInt((form.elements.namedItem('quantity') as HTMLInputElement).value),
             lot_number: (form.elements.namedItem('lot') as HTMLInputElement).value,
-            expiry_date: (form.elements.namedItem('expiry') as HTMLInputElement).value || null
+            expiry_date: (form.elements.namedItem('expiry') as HTMLInputElement).value || null,
+            status: (form.elements.namedItem('status') as HTMLSelectElement).value,
+            // New Field
+            serials: (form.elements.namedItem('serials') as HTMLInputElement).value 
         };
         onSubmit(data);
     };
@@ -238,6 +253,27 @@ const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
                         <label className="text-[10px] font-bold text-slate-500 uppercase">Expiry (Optional)</label>
                         <input name="expiry" type="date" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" />
                     </div>
+                    
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Status (QC)</label>
+                        <select name="status" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1 font-bold text-slate-700">
+                            <option value="AVAILABLE">Available (Good Stock)</option>
+                            <option value="DAMAGED">Damaged (Do Not Sell)</option>
+                            <option value="QUARANTINE">Quarantine (Hold)</option>
+                        </select>
+                    </div>
+
+                    {/* --- NEW SERIAL NUMBER INPUT --- */}
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Serial Numbers</label>
+                        <textarea 
+                            name="serials" 
+                            placeholder="Comma separated (e.g. SN1, SN2, SN3)" 
+                            className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1 h-20 resize-none"
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1">Required if item is Serialized.</p>
+                    </div>
+
                     <button type="submit" className="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-lg transition-transform active:scale-95 text-sm mt-2">Receive Stock</button>
                 </form>
             </div>
@@ -1029,7 +1065,17 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 </div>
             </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-6 flex justify-between items-center">
+                {/* --- BUTTON: Packing Slip --- */}
+                <a 
+                    href={`${API_URL}/orders/${order.id}/packing_slip/`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 font-bold hover:underline flex items-center gap-2"
+                >
+                    <ClipboardList size={18}/> Download Packing Slip
+                </a>
+
                 <button 
                     disabled={currentPacked !== totalItems || !boxSize || isSealed} 
                     onClick={handleSeal} 
@@ -1045,6 +1091,8 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
 // --- MAIN APP ---
 
 export default function App() {
+  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [isMobileMode, setIsMobileMode] = useState(window.location.pathname === '/mobile');
   const [activeTab, setActiveTab] = useState('Overview');
   const [tabHistory, setTabHistory] = useState<string[]>([]);
   const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE' | 'RECEIVE' | 'MOVE' | 'REPLENISH'>('IDLE');
@@ -1081,21 +1129,36 @@ export default function App() {
   const [showLabel, setShowLabel] = useState(false);
   const [currentZpl, setCurrentZpl] = useState('');
 
+  const handleLogin = (newToken: string) => {
+    setToken(newToken);
+    localStorage.setItem('token', newToken);
+  };
+
+  const handleLogout = () => {
+    setToken(null);
+    localStorage.removeItem('token');
+    setIsMobileMode(false);
+    window.history.pushState({}, '', '/');
+  };
+
   // Safe Data Fetching
   const fetchAll = async () => {
+    if (!token) return;
     try {
+        // Added Auth Header to all calls
+        const headers = { 'Authorization': `Token ${token}` };
         const responses = await Promise.allSettled([
-            fetch(`${API_URL}/inventory/`).then(r=>r.json()),
-            fetch(`${API_URL}/orders/`).then(r=>r.json()),
-            fetch(`${API_URL}/rmas/`).then(r=>r.json()),
-            fetch(`${API_URL}/history/`).then(r=>r.json()),
-            fetch(`${API_URL}/dashboard/stats/`).then(r=>r.json()),
-            fetch(`${API_URL}/cycle-counts/`).then(r=>r.json()),
-            fetch(`${API_URL}/purchase-orders/`).then(r=>r.json()),
-            fetch(`${API_URL}/items/`).then(r=>r.json()),
-            fetch(`${API_URL}/replenishment-tasks/`).then(r=>r.json()),
-            fetch(`${API_URL}/replenishment-rules/`).then(r=>r.json()),
-            fetch(`${API_URL}/locations/`).then(r=>r.json()),
+            fetch(`${API_URL}/inventory/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/orders/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/rmas/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/history/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/dashboard/stats/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/cycle-counts/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/purchase-orders/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/items/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/replenishment-tasks/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/replenishment-rules/`, {headers}).then(r=>r.json()),
+            fetch(`${API_URL}/locations/`, {headers}).then(r=>r.json()),
         ]);
 
         // Destructure results safely (defaults to empty array if failed)
@@ -1119,7 +1182,50 @@ export default function App() {
     }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { 
+      if(token) fetchAll(); 
+  }, [token]);
+
+  // --- WEBSOCKET CONNECTION ---
+  useEffect(() => {
+    if (!token) return;
+
+    // Connect to Django Channels WebSocket
+    const ws = new WebSocket('ws://127.0.0.1:8000/ws/dashboard/');
+
+    ws.onopen = () => {
+        console.log('Connected to Real-time WMS Stream');
+    };
+
+    ws.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        const msgType = data.message?.type;
+
+        if (msgType === 'INVENTORY_CHANGED' || msgType === 'ORDER_PICKED') {
+            // Refresh data automatically
+            console.log('Real-time update received:', msgType);
+            fetchAll();
+        }
+    };
+
+    ws.onclose = () => {
+        console.log('Disconnected from WMS Stream');
+    };
+
+    return () => {
+        ws.close();
+    };
+  }, [token]);
+
+  // If not logged in, show Login Screen
+  if (!token) {
+      return <Login onLogin={handleLogin} />;
+  }
+
+  // If Mobile Mode active, show Mobile Picker
+  if (isMobileMode) {
+      return <MobilePicker onLogout={handleLogout} />;
+  }
 
   // --- NAVIGATION ---
   const navigate = (tab: string) => {
@@ -1163,13 +1269,13 @@ export default function App() {
           customer_country: data.customer_country,
           lines: [{ item: item.id, qty_ordered: data.qty }]
       };
-      const res = await fetch(`${API_URL}/orders/`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+      const res = await fetch(`${API_URL}/orders/`, { method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, body: JSON.stringify(payload) });
       if(res.ok) { setShowOrderModal(false); fetchAll(); } else { alert("Error creating order"); }
   };
 
   const handleQuickReceive = async (data: any) => {
       const res = await fetch(`${API_URL}/inventory/receive/`, {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+          method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, body: JSON.stringify(data)
       });
       if (res.ok) { 
           setShowQuickReceive(false); 
@@ -1183,7 +1289,7 @@ export default function App() {
 
   const handleGenerateWave = async () => {
       const res = await fetch(`${API_URL}/orders/wave_plan/`, { 
-          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ order_ids: selectedOrders }) 
+          method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, body: JSON.stringify({ order_ids: selectedOrders }) 
       });
       const data = await res.json();
       if(res.ok) {
@@ -1203,10 +1309,9 @@ export default function App() {
           if (needed <= 0) continue;
           const toPick = Math.min(remainingQty, needed);
           if (toPick > 0) {
-              // Pass the lot number to the backend
               await fetch(`${API_URL}/orders/${orderId}/pick_item/`, {
                   method: 'POST', 
-                  headers: {'Content-Type': 'application/json'}, 
+                  headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, 
                   body: JSON.stringify({ 
                       sku: item.sku, 
                       location: item.location, 
@@ -1230,7 +1335,7 @@ export default function App() {
           
           const res = await fetch(`${API_URL}/orders/${orderId}/short_pick/`, {
               method: 'POST',
-              headers: {'Content-Type': 'application/json'},
+              headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`},
               body: JSON.stringify({ 
                   sku: item.sku, 
                   location: item.location, 
@@ -1253,10 +1358,11 @@ export default function App() {
 
   const handleCycleCountSubmit = async (taskId: number, qty: number) => {
       const res = await fetch(`${API_URL}/cycle-counts/${activeCount?.id}/submit_task/`, {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, qty })
+          method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, body: JSON.stringify({ task_id: taskId, qty })
       });
       if(res.ok) {
-          const updatedCounts = await fetch(`${API_URL}/cycle-counts/`).then(r=>r.json());
+          // Refresh handled by WebSocket or manual fetch
+          const updatedCounts = await fetch(`${API_URL}/cycle-counts/`, {headers: {'Authorization': `Token ${token}`}}).then(r=>r.json());
           setCounts(updatedCounts);
           const current = updatedCounts.find((c:any) => c.id === activeCount?.id);
           setActiveCount(current);
@@ -1266,7 +1372,7 @@ export default function App() {
   const handleReceiveSubmit = async (item: any, qty: number, loc: string, lot?: string, expiry?: string) => {
       if(!activePO) return;
       const res = await fetch(`${API_URL}/purchase-orders/${activePO.id}/receive_item/`, {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, 
+          method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, 
           body: JSON.stringify({ 
               sku: item.sku, 
               location: loc, 
@@ -1276,7 +1382,7 @@ export default function App() {
           })
       });
       if(res.ok) {
-          const updatedPos = await fetch(`${API_URL}/purchase-orders/`).then(r=>r.json());
+          const updatedPos = await fetch(`${API_URL}/purchase-orders/`, {headers: {'Authorization': `Token ${token}`}}).then(r=>r.json());
           setPos(updatedPos);
           const current = updatedPos.find((p:any) => p.id === activePO.id);
           setActivePO(current);
@@ -1285,19 +1391,19 @@ export default function App() {
 
   const handleMoveSubmit = async (data: any) => {
       const res = await fetch(`${API_URL}/inventory/move/`, {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+          method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, body: JSON.stringify(data)
       });
       if(res.ok) { alert("Move Successful!"); fetchAll(); } 
       else { const err = await res.json(); alert("Error: " + err.error); }
   };
 
   const handleReplenishSubmit = async (task: any) => {
-      await fetch(`${API_URL}/replenishment-tasks/${task.id}/complete/`, { method: 'POST' });
+      await fetch(`${API_URL}/replenishment-tasks/${task.id}/complete/`, { method: 'POST', headers: {'Authorization': `Token ${token}`} });
       setReplenishTasks(prev => prev.map(t => t.id === task.id ? {...t, status: 'COMPLETED'} : t));
   };
 
   const handleGenerateReplenish = async () => {
-      await fetch(`${API_URL}/replenishment-tasks/generate/`, { method: 'POST' });
+      await fetch(`${API_URL}/replenishment-tasks/generate/`, { method: 'POST', headers: {'Authorization': `Token ${token}`} });
       fetchAll();
   };
 
@@ -1311,7 +1417,7 @@ export default function App() {
           max_qty: parseInt((form.elements.namedItem('max') as HTMLInputElement).value),
           is_pick_face: true
       };
-      await fetch(`${API_URL}/replenishment-rules/`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+      await fetch(`${API_URL}/replenishment-rules/`, { method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, body: JSON.stringify(data) });
       form.reset();
       fetchAll();
   };
@@ -1320,7 +1426,7 @@ export default function App() {
       try {
           const res = await fetch(`${API_URL}/locations/`, { 
               method: 'POST', 
-              headers: {'Content-Type': 'application/json'}, 
+              headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, 
               body: JSON.stringify(data) 
           });
           
@@ -1328,7 +1434,6 @@ export default function App() {
               setShowLocationModal(false);
               fetchAll();
           } else {
-              // Robust error handling
               const errorData = await res.json();
               const errorMessage = Object.entries(errorData)
                   .map(([key, val]) => `${key}: ${val}`)
@@ -1345,7 +1450,7 @@ export default function App() {
     
     const res = await fetch(`${API_URL}/cycle-counts/create_for_location/`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`},
         body: JSON.stringify({ location: loc })
     });
     
@@ -1367,6 +1472,7 @@ export default function App() {
               method: 'POST',
               headers: {
                   'Content-Type': 'application/json',
+                  'Authorization': `Token ${token}`
               }
           });
           
@@ -1391,23 +1497,23 @@ export default function App() {
   };
 
   const handleGenerateLabel = async (id: number) => {
-      const res = await fetch(`${API_URL}/orders/${id}/shipping_label/`);
+      const res = await fetch(`${API_URL}/orders/${id}/shipping_label/`, {headers: {'Authorization': `Token ${token}`}});
       if(res.ok) { const zpl = await res.text(); setCurrentZpl(zpl); setShowLabel(true); }
   };
 
   const handleCreateRMA = async (payload: any) => {
-      const res = await fetch(`${API_URL}/rmas/`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+      const res = await fetch(`${API_URL}/rmas/`, { method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, body: JSON.stringify(payload) });
       if(res.ok) { setShowRMAModal(false); fetchAll(); }
   };
 
   const handleReceiveRMA = async (id: number) => {
       if(!confirm("Receive items to default dock?")) return;
-      await fetch(`${API_URL}/rmas/${id}/process_receipt/`, { method: 'POST' });
+      await fetch(`${API_URL}/rmas/${id}/process_receipt/`, { method: 'POST', headers: {'Authorization': `Token ${token}`} });
       fetchAll();
   };
 
   const handleAutoReplenish = async () => {
-      const res = await fetch(`${API_URL}/purchase-orders/auto_replenish/`, {method: 'POST'});
+      const res = await fetch(`${API_URL}/purchase-orders/auto_replenish/`, {method: 'POST', headers: {'Authorization': `Token ${token}`}});
       if(res.ok) { alert((await res.json()).message); fetchAll(); }
   };
 
@@ -1466,7 +1572,7 @@ export default function App() {
         
         {/* Toolbar */}
         <div className="h-12 flex items-center justify-between px-6 bg-white/10 border-b border-black/5 shrink-0">
-            <div className="flex items-center gap-4 w-40"><MacTrafficLights onRed={() => setActiveTab('Overview')} onYellow={handleBack} onGreen={toggleFullscreen} /></div>
+            <div className="flex items-center gap-4 w-40"><MacTrafficLights onRed={handleLogout} onYellow={handleBack} onGreen={toggleFullscreen} /></div>
             <div className="font-semibold text-sm text-slate-600/80 flex items-center gap-2"><Layers size={14} className="text-blue-600"/> NexWMS <span className="text-slate-400">v3.0</span></div>
             <div className="w-40 flex justify-end"><button onClick={fetchAll} className="p-1.5 hover:bg-black/5 rounded-md transition-colors text-slate-500"><RefreshCw size={14}/></button></div>
         </div>
@@ -1975,7 +2081,17 @@ export default function App() {
                     </div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">SKU</th><th className="p-4">Location</th><th className="p-4">Lot #</th><th className="p-4">Expiry</th><th className="p-4 text-right">Qty</th></tr></thead>
+                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5">
+                                <tr>
+                                    <th className="p-4">SKU</th>
+                                    <th className="p-4">Location</th>
+                                    <th className="p-4">Lot #</th>
+                                    <th className="p-4">Expiry</th>
+                                    {/* [MODIFIED] Added Status Header */}
+                                    <th className="p-4">Status</th>
+                                    <th className="p-4 text-right">Qty</th>
+                                </tr>
+                            </thead>
                             <tbody>
                                 {inventory.map(i => (
                                     <tr key={i.id} className="hover:bg-blue-50/20 border-b border-black/5 last:border-0">
@@ -1983,6 +2099,16 @@ export default function App() {
                                         <td className="p-4 font-mono text-xs">{i.location_code}</td>
                                         <td className="p-4 font-mono text-xs text-slate-500">{i.lot_number || '-'}</td>
                                         <td className="p-4 font-mono text-xs text-slate-500">{i.expiry_date || '-'}</td>
+                                        {/* [MODIFIED] Added Status Cell */}
+                                        <td className="p-4">
+                                            <span className={`px-2 py-1 rounded text-[10px] font-bold border ${
+                                                i.status === 'AVAILABLE' ? 'bg-green-100 text-green-700 border-green-200' :
+                                                i.status === 'DAMAGED' ? 'bg-red-100 text-red-700 border-red-200' :
+                                                'bg-yellow-100 text-yellow-700 border-yellow-200'
+                                            }`}>
+                                                {i.status || 'AVAILABLE'}
+                                            </span>
+                                        </td>
                                         <td className="p-4 text-right font-bold text-slate-600">{i.quantity}</td>
                                     </tr>
                                 ))}
@@ -2026,6 +2152,16 @@ export default function App() {
              <DockItem icon={RotateCcw} label="Returns" active={activeTab==='Returns'} onClick={()=>navigate('Returns')} />
              <div className="w-px h-10 bg-black/10 mx-2"></div>
              <DockItem icon={Scan} label="Scanner" active={activeTab==='Scanner'} onClick={()=>navigate('Scanner')} />
+             {/* --- NEW: Mobile Switcher --- */}
+             <DockItem 
+                icon={QrCode}
+                label="Mobile View" 
+                active={false} 
+                onClick={() => {
+                    window.history.pushState({}, '', '/mobile');
+                    setIsMobileMode(true);
+                }} 
+             />
         </div>
 
       </div>

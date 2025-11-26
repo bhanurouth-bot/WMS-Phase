@@ -4,6 +4,7 @@ class Item(models.Model):
     sku = models.CharField(max_length=50, unique=True, db_index=True)
     name = models.CharField(max_length=200)
     attributes = models.JSONField(default=dict, blank=True)
+    is_serialized = models.BooleanField(default=False) # Track if this item needs serials
 
     def __str__(self):
         return f"{self.sku} - {self.name}"
@@ -20,14 +21,19 @@ class Location(models.Model):
     location_type = models.CharField(max_length=20, choices=LOCATION_TYPES, default='RESERVE')
     zone = models.CharField(max_length=10, blank=True) 
     
-    # --- NEW VISUAL FIELDS ---
-    x = models.IntegerField(default=0) # Grid X position (e.g., 0-20)
-    y = models.IntegerField(default=0) # Grid Y position (e.g., 0-20)
+    x = models.IntegerField(default=0)
+    y = models.IntegerField(default=0)
     
     def __str__(self):
         return f"{self.location_code} ({self.location_type})"
 
 class Inventory(models.Model):
+    STATUS_CHOICES = [
+        ('AVAILABLE', 'Available'),
+        ('QUARANTINE', 'Quarantine'),
+        ('DAMAGED', 'Damaged'),
+    ]
+
     item = models.ForeignKey(Item, on_delete=models.CASCADE)
     location_code = models.CharField(max_length=20)
     quantity = models.IntegerField(default=0) 
@@ -35,16 +41,20 @@ class Inventory(models.Model):
     version = models.IntegerField(default=0)
     lot_number = models.CharField(max_length=50, blank=True, null=True)
     expiry_date = models.DateField(blank=True, null=True)
+    
+    # --- NEW FIELD ---
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='AVAILABLE')
 
     class Meta:
-        unique_together = ('item', 'location_code', 'lot_number')
+        # Update unique_together to include status
+        unique_together = ('item', 'location_code', 'lot_number', 'status')
     
     @property
     def available_quantity(self):
         return self.quantity - self.reserved_quantity
 
     def __str__(self):
-        return f"{self.item.sku} @ {self.location_code}"
+        return f"{self.item.sku} @ {self.location_code} ({self.status})"
 
 class TransactionLog(models.Model):
     ACTION_CHOICES = [
@@ -65,6 +75,30 @@ class TransactionLog(models.Model):
 
     def __str__(self):
         return f"[{self.timestamp}] {self.action}: {self.sku_snapshot} ({self.quantity_change})"
+
+class SerialNumber(models.Model):
+    STATUS_CHOICES = [
+        ('IN_STOCK', 'In Stock'),
+        ('PACKED', 'Packed'),
+        ('SHIPPED', 'Shipped'),
+        ('RETURNED', 'Returned'),
+    ]
+    
+    serial = models.CharField(max_length=100, unique=True)
+    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name='serials')
+    location = models.ForeignKey('Location', on_delete=models.SET_NULL, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='IN_STOCK')
+    
+    # Link to specific inventory batch (optional but helpful)
+    inventory = models.ForeignKey('Inventory', on_delete=models.SET_NULL, null=True, blank=True)
+    
+    # Link to outbound order line when allocated/shipped
+    allocated_to = models.ForeignKey('OrderLine', on_delete=models.SET_NULL, null=True, blank=True, related_name='assigned_serials')
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"SN: {self.serial} ({self.item.sku})"
 
 class Supplier(models.Model):
     name = models.CharField(max_length=200)

@@ -18,11 +18,11 @@ class InventorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Inventory
-        # --- ADDED 'lot_number' AND 'expiry_date' HERE ---
+        # --- ADDED 'status' HERE ---
         fields = [
             'id', 'item_id', 'item_sku', 'item_name', 'item_attr', 
             'location_code', 'quantity', 'version', 'reserved_quantity', 
-            'available_quantity', 'lot_number', 'expiry_date'
+            'available_quantity', 'lot_number', 'expiry_date', 'status'
         ]
 
 class TransactionLogSerializer(serializers.ModelSerializer):

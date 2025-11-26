@@ -18,6 +18,8 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne', # <--- Must be before django.contrib.staticfiles
+    'channels', # <--- Add this
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -63,7 +65,14 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'wms_backend.wsgi.application'
+# WSGI_APPLICATION = 'wms_backend.wsgi.application' # Comment this out or keep as fallback
+ASGI_APPLICATION = 'wms_backend.asgi.application' # <--- Add this
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    }
+}
 
 DATABASES = {
     'default': {

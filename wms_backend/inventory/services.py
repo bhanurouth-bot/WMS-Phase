@@ -1,12 +1,31 @@
 import random
 from django.db import transaction
 from django.db.models import F, Sum
-from .models import RMA, CycleCountSession, CycleCountTask, Inventory, Item, ReplenishmentTask, TransactionLog, Order, OrderLine, RMALine, PurchaseOrder, Location
-
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+import io
+from .models import RMA, CycleCountSession, CycleCountTask, Inventory, Item, LocationConfiguration, ReplenishmentTask, TransactionLog, Order, OrderLine, RMALine, PurchaseOrder, Location
+from .models import SerialNumber
 class InventoryService:
     
+
     @staticmethod
-    def receive_item(sku, location, quantity, lot_number=None, expiry_date=None, attributes=None):
+    def broadcast_update(type_name, data=None):
+        """Helper to send real-time updates to the dashboard"""
+        layer = get_channel_layer()
+        async_to_sync(layer.group_send)(
+            "dashboard",
+            {
+                "type": "dashboard_update",
+                "message": {"type": type_name, "data": data}
+            }
+        )
+
+    @staticmethod
+    def receive_item(sku, location, quantity, lot_number=None, expiry_date=None, status='AVAILABLE', serials=None):
         with transaction.atomic():
             try:
                 item = Item.objects.get(sku=sku)
@@ -15,13 +34,24 @@ class InventoryService:
 
             if not Location.objects.filter(location_code=location).exists():
                 return {"error": f"Invalid Location: {location}. Create it in Layout first."}
+            
+            if item.is_serialized:
+                if not serials or len(serials) != quantity:
+                    return {"error": f"Item is serialized. Expected {quantity} serial numbers, got {len(serials) if serials else 0}."}
+                
+                # Check duplicates
+                existing = SerialNumber.objects.filter(serial__in=serials).values_list('serial', flat=True)
+                if existing:
+                    return {"error": f"Duplicate serials found: {list(existing)}"}
 
             clean_lot = lot_number.strip() if lot_number and lot_number.strip() else None
 
+            # --- UPDATED: Include status in get_or_create ---
             inventory, created = Inventory.objects.select_for_update().get_or_create(
                 item=item,
                 location_code=location,
                 lot_number=clean_lot,
+                status=status, # Separate inventory record for different statuses
                 defaults={
                     'quantity': 0, 
                     'version': 0,
@@ -33,12 +63,25 @@ class InventoryService:
             inventory.version += 1
             inventory.save()
 
+
+            # --- CREATE SERIALS ---
+            if item.is_serialized and serials:
+                loc_obj = Location.objects.get(location_code=location)
+                for sn in serials:
+                    SerialNumber.objects.create(
+                        serial=sn, item=item, location=loc_obj, inventory=inventory, status='IN_STOCK'
+                    )
+
             TransactionLog.objects.create(
                 action='RECEIVE',
                 sku_snapshot=sku,
                 location_snapshot=location,
-                quantity_change=quantity
+                quantity_change=quantity,
+                lot_snapshot=clean_lot
             )
+
+            # --- BROADCAST UPDATE ---
+            InventoryService.broadcast_update("INVENTORY_CHANGED")
 
             return {"success": True, "new_qty": inventory.quantity, "id": inventory.id}
 
@@ -64,12 +107,14 @@ class InventoryService:
             target_line = new_lines[target_line_index]
             received_so_far = target_line.get('received', 0)
 
+            # Defaults to AVAILABLE for PO receiving
             inv_res = InventoryService.receive_item(
                 sku=sku, 
                 location=location, 
                 quantity=qty, 
                 lot_number=lot_number, 
-                expiry_date=expiry_date
+                expiry_date=expiry_date,
+                status='AVAILABLE'
             )
             
             if "error" in inv_res:
@@ -141,10 +186,12 @@ class InventoryService:
                 if qty_needed <= 0:
                     continue
 
+                # --- UPDATED: Filter by status='AVAILABLE' ---
                 candidates = Inventory.objects.filter(
                     item=line.item,
-                    quantity__gt=F('reserved_quantity')
-                ).order_by('id')
+                    quantity__gt=F('reserved_quantity'),
+                    status='AVAILABLE' # <--- CRITICAL: Only allocate good stock
+                ).order_by('expiry_date', 'id') # FEFO priority
 
                 for bin in candidates:
                     if qty_needed <= 0:
@@ -180,7 +227,7 @@ class InventoryService:
             }
         
     @staticmethod
-    def pick_order_item(order_id, item_sku, location_code, qty=1, lot_number=None):
+    def pick_order_item(order_id, item_sku, location_code, qty=1, lot_number=None, serial_picked=None):
         with transaction.atomic():
             try:
                 order = Order.objects.get(id=order_id)
@@ -192,18 +239,33 @@ class InventoryService:
             if not line:
                 return {"error": "Item not in this order"}
             
+            # --- SERIAL PICKING LOGIC ---
+            if item.is_serialized:
+                if not serial_picked:
+                    return {"error": "Serial number scan required for this item."}
+                
+                try:
+                    sn_obj = SerialNumber.objects.get(serial=serial_picked, item=item, status='IN_STOCK')
+                    if sn_obj.location.location_code != location_code:
+                        return {"error": f"Serial {serial_picked} is at {sn_obj.location.location_code}, not {location_code}"}
+                except SerialNumber.DoesNotExist:
+                    return {"error": f"Serial {serial_picked} invalid or unavailable."}
+
+                # Link serial to order line
+                sn_obj.status = 'PACKED' # Reserved for this order
+                sn_obj.allocated_to = line
+                sn_obj.save()
+            
             if line.qty_picked + qty > line.qty_allocated:
                 return {"error": "Cannot pick more than allocated"}
 
-            # --- UPDATED LOGIC: Filter by Lot Number if provided ---
             try:
                 qs = Inventory.objects.select_for_update().filter(
-                    item=item, location_code=location_code, quantity__gt=0
+                    item=item, location_code=location_code, quantity__gt=0, status='AVAILABLE'
                 )
                 if lot_number:
                     qs = qs.filter(lot_number=lot_number)
                 
-                # Default to FEFO (First Expiry) if no specific lot targeted, or as fallback
                 inv = qs.order_by('expiry_date', 'version').first()
 
             except Inventory.DoesNotExist:
@@ -229,7 +291,7 @@ class InventoryService:
                 sku_snapshot=item.sku,
                 location_snapshot=location_code,
                 quantity_change=-qty,
-                lot_snapshot=inv.lot_number # Record the specific lot picked
+                lot_snapshot=inv.lot_number
             )
 
             return {"success": True, "status": order.status}
@@ -261,25 +323,22 @@ class InventoryService:
     @staticmethod
     def ship_order(order_id):
         with transaction.atomic():
-            try:
-                order = Order.objects.get(id=order_id)
-            except Order.DoesNotExist:
-                return {"error": "Order not found"}
+            order = Order.objects.get(id=order_id)
+            if order.status not in ['PICKED', 'PACKED']: return {"error": "Not ready"}
             
-            if order.status not in ['PICKED', 'PACKED']:
-                return {"error": f"Order is {order.status}, must be PICKED or PACKED to ship."}
-
             order.status = 'SHIPPED'
             order.save()
-            
+
+            # Update Serials
             for line in order.lines.all():
+                # Bulk update serials attached to this line
+                line.assigned_serials.update(status='SHIPPED')
+                
                 TransactionLog.objects.create(
-                    action='SHIP',
-                    sku_snapshot=line.item.sku,
-                    location_snapshot='OUTBOUND_DOCK',
-                    quantity_change=0
+                    action='SHIP', sku_snapshot=line.item.sku, location_snapshot='OUTBOUND', quantity_change=0
                 )
             
+            InventoryService.broadcast_update("ORDER_SHIPPED")
             return {"success": True, "status": "SHIPPED"}
         
     @staticmethod
@@ -294,9 +353,12 @@ class InventoryService:
                 return {"error": "RMA already processed"}
 
             for line in rma.lines.all():
+                # --- UPDATED: Returns default to QUARANTINE usually, but sticking to AVAILABLE for now or QUARANTINE if you prefer ---
+                # Let's set to QUARANTINE for safety since it's a return
                 inventory, _ = Inventory.objects.select_for_update().get_or_create(
                     item=line.item,
                     location_code=location_code,
+                    status='QUARANTINE', # <--- New Default for Returns
                     defaults={'quantity': 0, 'version': 0}
                 )
                 
@@ -455,7 +517,8 @@ class InventoryService:
                 pick_summary[sku]["orders"].append(order.order_number)
                 pick_summary[sku]["order_ids"].append(order.id)
                 
-                first_inv = Inventory.objects.filter(item__sku=sku, quantity__gt=0).first()
+                # --- UPDATED: Prefer picking from AVAILABLE stock only ---
+                first_inv = Inventory.objects.filter(item__sku=sku, quantity__gt=0, status='AVAILABLE').first()
                 if first_inv:
                     pick_summary[sku]["location"] = first_inv.location_code
                     # Fetch Coordinates
@@ -481,7 +544,7 @@ class InventoryService:
                 try:
                     order = Order.objects.get(id=oid)
                     for line in order.lines.all():
-                        inv = Inventory.objects.filter(item=line.item, quantity__gt=0).first()
+                        inv = Inventory.objects.filter(item=line.item, quantity__gt=0, status='AVAILABLE').first()
                         if inv:
                             InventoryService.pick_order_item(oid, line.item.sku, inv.location_code, line.qty_allocated)
                     
@@ -511,6 +574,7 @@ class InventoryService:
                 item=source_inv.item,
                 location_code=dest_loc,
                 lot_number=source_inv.lot_number,
+                status=source_inv.status, # --- MOVE preserves status ---
                 defaults={
                     'quantity': 0, 
                     'version': 0,
@@ -539,12 +603,12 @@ class InventoryService:
         tasks_created = 0
 
         for config in configs:
-            current_inv = Inventory.objects.filter(location_code=config.location_code, item=config.item).aggregate(total=Sum('quantity'))['total'] or 0
+            current_inv = Inventory.objects.filter(location_code=config.location_code, item=config.item, status='AVAILABLE').aggregate(total=Sum('quantity'))['total'] or 0
             
             if current_inv < config.min_qty:
                 qty_needed = config.max_qty - current_inv
                 
-                reserve_stock = Inventory.objects.filter(item=config.item, quantity__gt=0)\
+                reserve_stock = Inventory.objects.filter(item=config.item, quantity__gt=0, status='AVAILABLE')\
                                                  .exclude(location_code=config.location_code)\
                                                  .order_by('-quantity').first()
                 
@@ -601,7 +665,7 @@ class InventoryService:
                 line.save()
                 
                 inv = Inventory.objects.select_for_update().filter(
-                    item=item, location_code=location_code
+                    item=item, location_code=location_code, status='AVAILABLE'
                 ).first()
                 
                 if inv:
@@ -639,3 +703,78 @@ class InventoryService:
                 "message": f"Short pick recorded. Cycle Count {system_ref} generated.",
                 "new_order_status": order.status
             }
+        
+    @staticmethod
+    def generate_packing_slip_pdf(order_id):
+        try:
+            order = Order.objects.get(id=order_id)
+        except Order.DoesNotExist:
+            return None
+
+        buffer = io.BytesIO()
+        p = canvas.Canvas(buffer, pagesize=letter)
+        width, height = letter
+
+        # --- Header ---
+        p.setFont("Helvetica-Bold", 24)
+        p.drawString(50, height - 50, "PACKING SLIP")
+        
+        p.setFont("Helvetica", 12)
+        p.drawString(50, height - 80, f"Order #: {order.order_number}")
+        p.drawString(50, height - 100, f"Date: {order.created_at.strftime('%Y-%m-%d')}")
+
+        # --- Company Info (Right Aligned) ---
+        p.drawRightString(width - 50, height - 50, "NexWMS Inc.")
+        p.drawRightString(width - 50, height - 65, "100 Warehouse Dr.")
+        p.drawRightString(width - 50, height - 80, "New York, NY 10001")
+
+        # --- Ship To ---
+        p.setFont("Helvetica-Bold", 14)
+        p.drawString(50, height - 140, "Ship To:")
+        p.setFont("Helvetica", 12)
+        p.drawString(50, height - 160, order.customer_name)
+        p.drawString(50, height - 175, order.customer_address)
+        p.drawString(50, height - 190, f"{order.customer_city}, {order.customer_state} {order.customer_zip}")
+
+        # --- Line Items Table Header ---
+        y = height - 230
+        p.setFillColor(colors.lightgrey)
+        p.rect(40, y-5, width-80, 20, fill=1, stroke=0)
+        p.setFillColor(colors.black)
+        p.setFont("Helvetica-Bold", 10)
+        p.drawString(50, y, "SKU")
+        p.drawString(200, y, "ITEM NAME")
+        p.drawString(400, y, "ORDERED")
+        p.drawString(480, y, "SHIPPED")
+
+        # --- Line Items ---
+        y -= 25
+        p.setFont("Helvetica", 10)
+        
+        for line in order.lines.all():
+            item_name = line.item.name[:35] + "..." if len(line.item.name) > 35 else line.item.name
+            p.drawString(50, y, line.item.sku)
+            p.drawString(200, y, item_name)
+            p.drawString(400, y, str(line.qty_ordered))
+            
+            # Bold the shipped quantity for visibility
+            p.setFont("Helvetica-Bold", 10)
+            p.drawString(480, y, str(line.qty_picked))
+            p.setFont("Helvetica", 10)
+            
+            y -= 20
+            if y < 50: # New page if full
+                p.showPage()
+                y = height - 50
+
+        # --- Footer ---
+        p.line(50, 100, width-50, 100)
+        p.setFont("Helvetica-Oblique", 10)
+        p.drawString(50, 80, "Thank you for your business!")
+        p.drawString(50, 65, "For returns, please contact support@nexwms.com")
+
+        p.showPage()
+        p.save()
+        
+        buffer.seek(0)
+        return buffer

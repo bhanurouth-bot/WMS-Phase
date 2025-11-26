@@ -55,8 +55,6 @@ export default function Login({ onLogin }: LoginProps) {
         </h1>
 
         <form onSubmit={handleSubmit} className="w-64 relative group">
-          {/* Username Field (Hidden initially or styled minimally if you prefer just password like real macOS, 
-              but for a web app we need both) */}
           <input
             type="text"
             value={username}
@@ -66,7 +64,6 @@ export default function Login({ onLogin }: LoginProps) {
             autoFocus
           />
           
-          {/* Password Field */}
           <div className="relative">
             <input
               type="password"
@@ -93,7 +90,7 @@ export default function Login({ onLogin }: LoginProps) {
 
         <div className="mt-12 text-white/40 text-xs flex flex-col items-center gap-2">
             <div className="flex gap-1 items-center"><Lock size={12}/> Secured WMS Environment</div>
-            <p>NexWMS v1.0</p>
+            <p>NexWMS v3.0</p>
         </div>
       </div>
     </div>
