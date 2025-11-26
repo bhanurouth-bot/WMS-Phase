@@ -815,48 +815,85 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
 
     const handleScan = (e: React.FormEvent) => {
         e.preventDefault();
-        const val = input.trim().toUpperCase(); // Normalize input
+        const rawVal = input.trim(); 
+        const valUpper = rawVal.toUpperCase();
 
-        if (!val) return;
+        if (!rawVal) return;
 
-        if (scanStep === 'SKU') {
-            // --- STEP 1: Verify SKU ---
-            // Normalize line item SKU for comparison
-            const line = order.lines.find(l => (l.item_sku || '').trim().toUpperCase() === val);
-            
-            if (line) {
-                // Use the normalized key for counting
-                const key = line.item_sku.toUpperCase();
-                const currentCount = packedItems[key] || 0;
-                
-                if (currentCount < line.qty_picked) {
-                    setActiveSku(key); // Store normalized SKU
-                    setScanStep('LOT'); // Move to Lot Scan
-                    playSound('beep');
-                    setInput('');
-                } else { 
-                    playSound('error');
-                    alert(`Item '${val}' is already fully packed! (${currentCount}/${line.qty_picked})`); 
-                    setInput(''); 
-                }
-            } else { 
+        // --- 1. COMPOSITE SCAN CHECK (Format: SKU|LOT) ---
+        // If the barcode contains a pipe '|', we treat it as a composite code
+        if (rawVal.includes('|')) {
+            const [skuPart, lotPart] = rawVal.split('|');
+            const normSku = skuPart.trim().toUpperCase();
+            // const normLot = lotPart.trim(); // We can record this if backend supports it later
+
+            // Verify SKU exists in order
+            const line = order.lines.find(l => (l.item_sku || '').toUpperCase() === normSku);
+            if (!line) {
                 playSound('error');
-                alert(`Wrong Item! Scanned '${val}' is NOT in this order.`); 
-                setInput(''); 
-            }
-        } else {
-            // --- STEP 2: Verify Lot ---
-            if (val === activeSku) {
-                playSound('error');
-                alert("You scanned the SKU again. Please scan the Lot Number found on the item label.");
+                alert(`Composite Error: Item '${normSku}' is NOT in this order.`);
                 setInput('');
                 return;
             }
 
-            // Commit the pack (we don't validate the lot against backend yet, just record it)
+            // Check if we have space to pack more
+            const currentCount = packedItems[normSku] || 0;
+            if (currentCount >= line.qty_picked) {
+                playSound('error');
+                alert(`Item '${normSku}' is already fully packed!`);
+                setInput('');
+                return;
+            }
+
+            // SUCCESS: One-step pack
+            setPackedItems(prev => ({...prev, [normSku]: (prev[normSku] || 0) + 1}));
+            
+            // Ensure we reset to ready state
+            setScanStep('SKU');
+            setActiveSku('');
+            playSound('success');
+            setInput('');
+            return;
+        }
+
+        // --- 2. SEQUENTIAL SCAN LOGIC (Standard) ---
+        if (scanStep === 'SKU') {
+            // Step A: Verify SKU
+            const line = order.lines.find(l => (l.item_sku || '').toUpperCase() === valUpper);
+            
+            if (line) {
+                const key = line.item_sku.toUpperCase();
+                const currentCount = packedItems[key] || 0;
+                
+                if (currentCount < line.qty_picked) {
+                    setActiveSku(key); 
+                    setScanStep('LOT'); // Move to Lot Step
+                    playSound('beep');
+                    setInput('');
+                } else { 
+                    playSound('error');
+                    alert(`Item '${valUpper}' is already fully packed!`); 
+                    setInput(''); 
+                }
+            } else { 
+                playSound('error');
+                alert(`Wrong Item! Scanned '${valUpper}' is NOT in this order.`); 
+                setInput(''); 
+            }
+        } else {
+            // Step B: Verify Lot
+            // Prevent user from accidentally scanning SKU again
+            if (valUpper === activeSku) {
+                playSound('error');
+                alert("You scanned the SKU again. Please scan the Lot Number (e.g., P-01).");
+                setInput('');
+                return;
+            }
+
+            // Commit the pack
             setPackedItems(prev => ({...prev, [activeSku]: (prev[activeSku] || 0) + 1}));
             
-            // Reset cycle
+            // Reset to SKU scan for next item
             setScanStep('SKU');
             setActiveSku('');
             playSound('success');
@@ -868,7 +905,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
         if (!boxSize) return alert("Select a box size first!");
         
         if (currentPacked !== totalItems) {
-            return alert(`You have only packed ${currentPacked} of ${totalItems} items.`);
+            return alert(`Incomplete: Packed ${currentPacked}/${totalItems} items.`);
         }
 
         setIsSealed(true);
@@ -900,6 +937,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
             // 3. Get Label
             const resLabel = await fetch(`${API_URL}/orders/${order.id}/shipping_label/`);
             const zpl = await resLabel.text();
+            
             onPrint(zpl);
             onComplete();
 
@@ -932,7 +970,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 {/* LEFT: Item List */}
                 <div className="w-1/3 flex flex-col gap-4 overflow-y-auto pr-2">
                     {order.lines.map(line => {
-                        // Normalize key for lookup
                         const key = (line.item_sku || '').toUpperCase();
                         const packed = packedItems[key] || 0;
                         const isComplete = packed >= line.qty_picked;
@@ -973,11 +1010,14 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                                 autoFocus 
                                 value={input} 
                                 onChange={e=>setInput(e.target.value)} 
-                                placeholder={scanStep === 'SKU' ? "Scan SKU..." : "Scan Lot Number..."}
+                                placeholder={scanStep === 'SKU' ? "Scan SKU (or SKU|LOT)..." : "Scan Lot Number..."}
                                 className={`w-full p-4 pl-12 rounded-xl shadow-lg border-2 outline-none text-lg font-mono transition-all
                                     ${scanStep === 'LOT' ? 'border-purple-500 focus:ring-4 ring-purple-500/20' : 'border-transparent focus:border-blue-500'}`}
                             />
                             <Barcode className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${scanStep === 'LOT' ? 'text-purple-500' : 'text-slate-400'}`}/>
+                        </div>
+                        <div className="text-[10px] text-center mt-2 text-slate-400 animate-in fade-in">
+                            💡 Power Tip: Scan <strong>SKU|LOT</strong> to verify and pack instantly.
                         </div>
                     </form>
 
