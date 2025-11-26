@@ -81,3 +81,16 @@ body {
 .active-press:active {
   transform: scale(0.95);
 }
+.glass-panel {
+  @apply bg-white/40 backdrop-blur-xl border border-white/50 shadow-xl;
+}
+
+.dock-container {
+  @apply bg-white/20 backdrop-blur-2xl border border-white/30 shadow-2xl;
+}
+
+/* Smooth font rendering for that "Apple" feel */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

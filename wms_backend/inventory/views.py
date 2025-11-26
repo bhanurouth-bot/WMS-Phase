@@ -7,13 +7,19 @@ from django.db.models import Sum, Count, F
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
-from .serializers import CycleCountSessionSerializer, ItemSerializer, InventorySerializer, PurchaseOrderSerializer, RMASerializer, SupplierSerializer, TransactionLogSerializer, OrderSerializer
-from .models import RMA, CycleCountSession, Item, Inventory, PurchaseOrder, Supplier, TransactionLog, Order
+from .serializers import CycleCountSessionSerializer, ItemSerializer, InventorySerializer, LocationConfigurationSerializer, LocationSerializer, PurchaseOrderSerializer, RMASerializer, ReplenishmentTaskSerializer, SupplierSerializer, TransactionLogSerializer, OrderSerializer
+from .models import RMA, CycleCountSession, Item, Inventory, Location, LocationConfiguration, PurchaseOrder, ReplenishmentTask, Supplier, TransactionLog, Order
 from .services import InventoryService
 
 class ItemViewSet(viewsets.ModelViewSet):
     queryset = Item.objects.all()
     serializer_class = ItemSerializer
+
+class LocationViewSet(viewsets.ModelViewSet):
+    queryset = Location.objects.all().order_by('location_code')
+    serializer_class = LocationSerializer
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['location_code', 'zone']
 
 class InventoryViewSet(viewsets.ModelViewSet):
     queryset = Inventory.objects.all().select_related('item').order_by('location_code')
@@ -27,11 +33,17 @@ class InventoryViewSet(viewsets.ModelViewSet):
         sku = request.data.get('sku')
         location = request.data.get('location')
         qty = int(request.data.get('quantity', 1))
+        
+        # --- NEW FIELDS ---
+        lot_number = request.data.get('lot_number')
+        expiry_date = request.data.get('expiry_date') # Format: YYYY-MM-DD
 
         if not all([sku, location]):
             return Response({'error': 'SKU and Location required'}, status=400)
 
-        result = InventoryService.receive_item(sku, location, qty)
+        # Pass new fields to service
+        result = InventoryService.receive_item(sku, location, qty, lot_number, expiry_date)
+        
         if "error" in result:
             return Response(result, status=400)
         return Response(result, status=200)
@@ -188,6 +200,20 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         result = InventoryService.complete_wave(order_ids)
         return Response(result)
+    
+    @action(detail=True, methods=['post'])
+    def short_pick(self, request, pk=None):
+        sku = request.data.get('sku')
+        location = request.data.get('location')
+        qty = int(request.data.get('qty', 1))
+        
+        result = InventoryService.record_short_pick(pk, sku, location, qty)
+        if "error" in result:
+            return Response(result, status=400)
+        return Response(result)
+    
+    
+
 
 class SupplierViewSet(viewsets.ModelViewSet):
     queryset = Supplier.objects.all()
@@ -242,8 +268,17 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         sku = request.data.get('sku')
         location = request.data.get('location')
         qty = int(request.data.get('qty', 1))
+        lot_number = request.data.get('lot_number')
+        expiry_date = request.data.get('expiry_date')
+
+        # --- FIX: Validation Check ---
+        if not location:
+            return Response({'error': 'Location is required. Scan a bin.'}, status=400)
+        if not sku:
+            return Response({'error': 'SKU is required.'}, status=400)
+
+        result = InventoryService.receive_po_item(pk, sku, location, qty, lot_number, expiry_date)
         
-        result = InventoryService.receive_po_item(pk, sku, location, qty)
         if "error" in result:
             return Response(result, status=400)
         return Response(result)
@@ -284,6 +319,40 @@ class CycleCountViewSet(viewsets.ModelViewSet):
         if "error" in result:
             return Response(result, status=400)
         return Response(result)
+    
+    @action(detail=False, methods=['post'])
+    def create_for_location(self, request):
+        """
+        Triggered by the 'Item Missing' button on the visual map.
+        Creates an immediate cycle count for a specific location.
+        """
+        location_code = request.data.get('location')
+        if not location_code:
+            return Response({'error': 'Location required'}, status=400)
+            
+        result = InventoryService.create_location_count(location_code)
+        if "error" in result:
+            return Response(result, status=400)
+        return Response(result)
+
+class LocationConfigurationViewSet(viewsets.ModelViewSet):
+    queryset = LocationConfiguration.objects.all()
+    serializer_class = LocationConfigurationSerializer
+
+class ReplenishmentTaskViewSet(viewsets.ModelViewSet):
+    queryset = ReplenishmentTask.objects.all().order_by('-created_at')
+    serializer_class = ReplenishmentTaskSerializer
+
+    @action(detail=False, methods=['post'])
+    def generate(self, request):
+        res = InventoryService.generate_replenishment_tasks()
+        return Response(res)
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        res = InventoryService.complete_replenishment(pk)
+        if "error" in res: return Response(res, status=400)
+        return Response(res)
 
 
 @api_view(['GET'])
@@ -308,9 +377,17 @@ def dashboard_stats(request):
     low_stock = Inventory.objects.filter(quantity__lt=10).count()
     recent_moves = TransactionLog.objects.count()
 
+    # --- NEW: Heatmap / Velocity Data ---
+    # Get top 10 most active bins based on transaction logs
+    # This drives the "Velocity" view if you implement it in the frontend
+    heatmap = TransactionLog.objects.values('location_snapshot')\
+        .annotate(activity=Count('id'))\
+        .order_by('-activity')[:10]
+
     return Response({
         "total_stock": total_stock,
         "total_locations": total_locations,
         "low_stock": low_stock,
-        "recent_moves": recent_moves
+        "recent_moves": recent_moves,
+        "heatmap": list(heatmap) # Returns [{"location_snapshot": "A-01", "activity": 50}, ...]
     })

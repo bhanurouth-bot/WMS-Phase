@@ -1,10 +1,15 @@
 from rest_framework import serializers
-from .models import RMA, CycleCountSession, CycleCountTask, Item, Inventory, RMALine, TransactionLog, Order, OrderLine, Supplier, PurchaseOrder
+from .models import RMA, CycleCountSession, CycleCountTask, Item, Inventory, Location, LocationConfiguration, RMALine, ReplenishmentTask, TransactionLog, Order, OrderLine, Supplier, PurchaseOrder
 
 class ItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = Item
         fields = ['id', 'sku', 'name', 'attributes']
+
+class LocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Location
+        fields = ['id', 'location_code', 'location_type', 'zone', 'x', 'y']
 
 class InventorySerializer(serializers.ModelSerializer):
     item_sku = serializers.CharField(source='item.sku', read_only=True)
@@ -93,3 +98,15 @@ class CycleCountSessionSerializer(serializers.ModelSerializer):
     class Meta:
         model = CycleCountSession
         fields = ['id', 'reference', 'created_at', 'status', 'tasks']
+
+class LocationConfigurationSerializer(serializers.ModelSerializer):
+    item_sku = serializers.CharField(source='item.sku', read_only=True)
+    class Meta:
+        model = LocationConfiguration
+        fields = ['id', 'location_code', 'is_pick_face', 'item', 'item_sku', 'min_qty', 'max_qty']
+
+class ReplenishmentTaskSerializer(serializers.ModelSerializer):
+    item_sku = serializers.CharField(source='item.sku', read_only=True)
+    class Meta:
+        model = ReplenishmentTask
+        fields = ['id', 'item', 'item_sku', 'source_location', 'dest_location', 'qty_to_move', 'status', 'created_at']

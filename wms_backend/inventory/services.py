@@ -1,23 +1,32 @@
 import random
 from django.db import transaction
-from django.db.models import F
-# IMPORTANT: Added PurchaseOrder to imports
-from .models import RMA, CycleCountSession, CycleCountTask, Inventory, Item, TransactionLog, Order, OrderLine, RMALine, PurchaseOrder
+from django.db.models import F, Sum
+from .models import RMA, CycleCountSession, CycleCountTask, Inventory, Item, ReplenishmentTask, TransactionLog, Order, OrderLine, RMALine, PurchaseOrder, Location
 
 class InventoryService:
     
     @staticmethod
-    def receive_item(sku, location, quantity, attributes=None):
+    def receive_item(sku, location, quantity, lot_number=None, expiry_date=None, attributes=None):
         with transaction.atomic():
             try:
                 item = Item.objects.get(sku=sku)
             except Item.DoesNotExist:
                 return {"error": "SKU not found in catalog"}
 
+            if not Location.objects.filter(location_code=location).exists():
+                return {"error": f"Invalid Location: {location}. Create it in Layout first."}
+
+            clean_lot = lot_number.strip() if lot_number and lot_number.strip() else None
+
             inventory, created = Inventory.objects.select_for_update().get_or_create(
                 item=item,
                 location_code=location,
-                defaults={'quantity': 0, 'version': 0}
+                lot_number=clean_lot,
+                defaults={
+                    'quantity': 0, 
+                    'version': 0,
+                    'expiry_date': expiry_date
+                }
             )
 
             inventory.quantity += quantity
@@ -33,18 +42,14 @@ class InventoryService:
 
             return {"success": True, "new_qty": inventory.quantity, "id": inventory.id}
 
-    # --- FIXED PO RECEIVING LOGIC ---
     @staticmethod
-    def receive_po_item(po_id, sku, location, qty):
+    def receive_po_item(po_id, sku, location, qty, lot_number=None, expiry_date=None):
         with transaction.atomic():
             try:
-                # Use select_for_update to lock the PO row
                 po = PurchaseOrder.objects.select_for_update().get(id=po_id)
             except PurchaseOrder.DoesNotExist:
                 return {"error": "PO not found"}
 
-            # 1. Find the line item
-            # We must clone the lines list to ensure Django detects the change
             new_lines = list(po.lines) 
             target_line_index = -1
             
@@ -57,23 +62,23 @@ class InventoryService:
                 return {"error": "Item not in this PO"}
 
             target_line = new_lines[target_line_index]
-
-            # 2. Update Receive Count
             received_so_far = target_line.get('received', 0)
-            if received_so_far + qty > target_line['qty']:
-                return {"error": f"Over-receiving! Ordered: {target_line['qty']}, Received: {received_so_far}"}
 
-            # 3. Increment Physical Inventory
-            inv_res = InventoryService.receive_item(sku, location, qty)
+            inv_res = InventoryService.receive_item(
+                sku=sku, 
+                location=location, 
+                quantity=qty, 
+                lot_number=lot_number, 
+                expiry_date=expiry_date
+            )
+            
             if "error" in inv_res:
                 return inv_res
 
-            # 4. Update the Line Data
             target_line['received'] = received_so_far + qty
-            new_lines[target_line_index] = target_line # Update list
-            po.lines = new_lines # Reassign to trigger dirty flag
+            new_lines[target_line_index] = target_line 
+            po.lines = new_lines 
 
-            # 5. Update Status
             total_ordered = sum(l['qty'] for l in new_lines)
             total_received = sum(l.get('received', 0) for l in new_lines)
 
@@ -82,10 +87,13 @@ class InventoryService:
             elif total_received > 0:
                 po.status = 'ORDERED'
             
-            # Force save specific fields
-            po.save(update_fields=['lines', 'status'])
+            po.save()
 
-            return {"success": True, "po_status": po.status, "line_progress": f"{target_line['received']}/{target_line['qty']}"}
+            return {
+                "success": True, 
+                "po_status": po.status, 
+                "line_progress": f"{target_line['received']}/{target_line['qty']}"
+            }
 
     @staticmethod
     def pick_item(inventory_id, qty_to_pick):
@@ -188,13 +196,13 @@ class InventoryService:
                 return {"error": "Cannot pick more than allocated"}
 
             try:
-                inv = Inventory.objects.select_for_update().get(
-                    item=item, location_code=location_code
-                )
+                inv = Inventory.objects.select_for_update().filter(
+                    item=item, location_code=location_code, quantity__gt=0
+                ).first()
             except Inventory.DoesNotExist:
                 return {"error": "Bin not found"}
 
-            if inv.quantity < qty:
+            if not inv or inv.quantity < qty:
                 return {"error": "Not enough physical stock"}
 
             inv.quantity -= qty
@@ -332,6 +340,33 @@ class InventoryService:
             return {"success": True, "session_id": session.id, "reference": ref}
 
     @staticmethod
+    def create_location_count(location_code):
+        with transaction.atomic():
+            inventory_items = Inventory.objects.filter(location_code=location_code, quantity__gt=0)
+            
+            if not inventory_items.exists():
+                return {"error": "System thinks this bin is empty. Perform a blind count if needed."}
+
+            ref = f"CC-LOC-{location_code}-{random.randint(1000,9999)}"
+            session = CycleCountSession.objects.create(
+                reference=ref, 
+                status='IN_PROGRESS',
+                device_id='MANUAL_TRIGGER'
+            )
+            
+            tasks = []
+            for inv in inventory_items:
+                tasks.append(CycleCountTask(
+                    session=session,
+                    inventory=inv,
+                    expected_qty=inv.quantity,
+                    status='PENDING'
+                ))
+            
+            CycleCountTask.objects.bulk_create(tasks)
+            return {"success": True, "message": f"Cycle Count {ref} created for {location_code}"}
+
+    @staticmethod
     def submit_count(task_id, counted_qty):
         with transaction.atomic():
             try:
@@ -403,7 +438,9 @@ class InventoryService:
                         "total_qty": 0, 
                         "orders": [],
                         "order_ids": [],
-                        "location": "Unknown" 
+                        "location": "Unknown",
+                        "x": 0, 
+                        "y": 0
                     }
                 
                 pick_summary[sku]["total_qty"] += line.qty_allocated
@@ -413,8 +450,13 @@ class InventoryService:
                 first_inv = Inventory.objects.filter(item__sku=sku, quantity__gt=0).first()
                 if first_inv:
                     pick_summary[sku]["location"] = first_inv.location_code
+                    # Fetch Coordinates
+                    loc = Location.objects.filter(location_code=first_inv.location_code).first()
+                    if loc:
+                        pick_summary[sku]["x"] = loc.x
+                        pick_summary[sku]["y"] = loc.y
 
-        sorted_pick_list = sorted(list(pick_summary.values()), key=lambda x: x['location'])
+        sorted_pick_list = sorted(list(pick_summary.values()), key=lambda x: (x['x'], x['y']))
 
         return {
             "success": True,
@@ -444,33 +486,36 @@ class InventoryService:
     @staticmethod
     def move_item(sku, source_loc, dest_loc, qty):
         with transaction.atomic():
-            # 1. Lock & Validate Source
             try:
-                source_inv = Inventory.objects.select_for_update().get(
+                source_inv = Inventory.objects.select_for_update().filter(
                     item__sku=sku, location_code=source_loc
-                )
+                ).first()
             except Inventory.DoesNotExist:
                 return {"error": "Source inventory not found"}
 
-            if source_inv.quantity < qty:
-                return {"error": f"Not enough stock. Available: {source_inv.quantity}"}
+            if not source_inv or source_inv.quantity < qty:
+                return {"error": f"Not enough stock. Available: {source_inv.quantity if source_inv else 0}"}
 
-            # 2. Get or Create Destination
-            # We use the item object from the source to ensure validity
+            if not Location.objects.filter(location_code=dest_loc).exists():
+                return {"error": f"Invalid Destination: {dest_loc}"}
+
             dest_inv, created = Inventory.objects.select_for_update().get_or_create(
                 item=source_inv.item,
                 location_code=dest_loc,
-                defaults={'quantity': 0, 'version': 0}
+                lot_number=source_inv.lot_number,
+                defaults={
+                    'quantity': 0, 
+                    'version': 0,
+                    'expiry_date': source_inv.expiry_date
+                }
             )
 
-            # 3. Execute Move
             source_inv.quantity -= qty
             source_inv.save()
             
             dest_inv.quantity += qty
             dest_inv.save()
 
-            # 4. Log It
             TransactionLog.objects.create(
                 action='MOVE',
                 sku_snapshot=sku,
@@ -479,3 +524,110 @@ class InventoryService:
             )
 
             return {"success": True, "message": f"Moved {qty} of {sku} from {source_loc} to {dest_loc}"}
+        
+    @staticmethod
+    def generate_replenishment_tasks():
+        configs = LocationConfiguration.objects.filter(is_pick_face=True, item__isnull=False)
+        tasks_created = 0
+
+        for config in configs:
+            current_inv = Inventory.objects.filter(location_code=config.location_code, item=config.item).aggregate(total=Sum('quantity'))['total'] or 0
+            
+            if current_inv < config.min_qty:
+                qty_needed = config.max_qty - current_inv
+                
+                reserve_stock = Inventory.objects.filter(item=config.item, quantity__gt=0)\
+                                                 .exclude(location_code=config.location_code)\
+                                                 .order_by('-quantity').first()
+                
+                if reserve_stock:
+                    if ReplenishmentTask.objects.filter(status='PENDING', dest_location=config.location_code, item=config.item).exists():
+                        continue
+
+                    to_move = min(qty_needed, reserve_stock.quantity)
+                    
+                    ReplenishmentTask.objects.create(
+                        item=config.item,
+                        source_location=reserve_stock.location_code,
+                        dest_location=config.location_code,
+                        qty_to_move=to_move
+                    )
+                    tasks_created += 1
+        
+        return {"success": True, "tasks_created": tasks_created}
+
+    @staticmethod
+    def complete_replenishment(task_id):
+        with transaction.atomic():
+            try:
+                task = ReplenishmentTask.objects.select_for_update().get(id=task_id)
+            except ReplenishmentTask.DoesNotExist:
+                return {"error": "Task not found"}
+            
+            if task.status == 'COMPLETED':
+                return {"error": "Already completed"}
+
+            move_res = InventoryService.move_item(task.item.sku, task.source_location, task.dest_location, task.qty_to_move)
+            
+            if "error" in move_res:
+                return move_res
+
+            task.status = 'COMPLETED'
+            task.save()
+            return {"success": True}
+    
+    @staticmethod
+    def record_short_pick(order_id, sku, location_code, qty_missing, user=None):
+        with transaction.atomic():
+            try:
+                order = Order.objects.select_for_update().get(id=order_id)
+                item = Item.objects.get(sku=sku)
+                line = order.lines.get(item=item)
+            except (Order.DoesNotExist, Item.DoesNotExist, OrderLine.DoesNotExist):
+                return {"error": "Invalid Order, Item, or Line"}
+
+            actual_shortage = min(line.qty_allocated, int(qty_missing))
+            
+            if actual_shortage > 0:
+                line.qty_allocated -= actual_shortage
+                line.save()
+                
+                inv = Inventory.objects.select_for_update().filter(
+                    item=item, location_code=location_code
+                ).first()
+                
+                if inv:
+                    inv.reserved_quantity = max(0, inv.reserved_quantity - actual_shortage)
+                    inv.save()
+
+            TransactionLog.objects.create(
+                action='ADJUST', 
+                sku_snapshot=sku,
+                location_snapshot=location_code,
+                quantity_change=0, 
+            )
+
+            system_ref = f"SYS-ERR-{random.randint(1000,9999)}"
+            session, _ = CycleCountSession.objects.get_or_create(
+                reference=system_ref,
+                defaults={'status': 'IN_PROGRESS', 'device_id': 'SYSTEM_AUTO'}
+            )
+            
+            if inv:
+                if not CycleCountTask.objects.filter(session=session, inventory=inv).exists():
+                    CycleCountTask.objects.create(
+                        session=session,
+                        inventory=inv,
+                        expected_qty=inv.quantity,
+                        status='PENDING'
+                    )
+
+            if any(l.qty_allocated < l.qty_ordered for l in order.lines.all()):
+                order.status = 'PENDING'
+                order.save()
+
+            return {
+                "success": True, 
+                "message": f"Short pick recorded. Cycle Count {system_ref} generated.",
+                "new_order_status": order.status
+            }

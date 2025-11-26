@@ -4,15 +4,18 @@ import {
   History, Printer, ShoppingCart, Plus, RotateCcw, 
   Layers, LayoutDashboard, 
   X, ChevronRight, ArrowLeft, Barcode, CheckCircle2, MapPin, ArrowRightCircle,
-  ArrowDownCircle, PackageCheck, ArrowRightLeft
+  ArrowDownCircle, PackageCheck, ArrowRightLeft, ClipboardList, Settings2, Play,
+  Grid, Trash2, Map as MapIcon, Download
 } from 'lucide-react';
+import { useScanDetection } from './hooks/useScanDetection';
 
 // --- API CONFIG ---
 const API_URL = 'http://127.0.0.1:8000/api';
 
 // --- TYPES ---
-interface InventoryItem { id: number; item_sku: string; item_name: string; location_code: string; quantity: number; available_quantity: number; reserved_quantity: number; }
+interface InventoryItem { id: number; item_sku: string; item_name: string; location_code: string; quantity: number; available_quantity: number; reserved_quantity: number; lot_number?: string; expiry_date?: string; }
 interface ItemMaster { id: number; sku: string; name: string; }
+interface LocationMaster { id: number; location_code: string; location_type: string; zone: string; x: number; y: number; }
 interface OrderLine { id: number; item: number; item_sku: string; qty_ordered: number; qty_allocated: number; qty_picked: number; }
 interface Order { 
   id: number; order_number: string; customer_name: string; status: string; created_at: string; 
@@ -20,22 +23,14 @@ interface Order {
   lines: OrderLine[]; 
 }
 interface LogItem { id: number; timestamp: string; action: string; sku_snapshot: string; quantity_change: number; location_snapshot: string; }
-interface DashboardStats { total_stock: number; total_locations: number; low_stock: number; recent_moves: number; }
+interface DashboardStats { total_stock: number; total_locations: number; low_stock: number; recent_moves: number; heatmap?: {location_snapshot: string, activity: number}[]; }
 interface PurchaseOrder { id: number; po_number: string; supplier_name: string; status: string; created_at: string; lines: {sku: string, qty: number, received: number}[]; }
 interface RMA { id: number; rma_number: string; order_number: string; customer: string; status: string; lines: any[]; }
 interface CycleCountTask { id: number; item_sku: string; location: string; expected_qty: number; counted_qty: number | null; status: 'PENDING' | 'COUNTED'; variance: number | null; }
 interface CycleCountSession { id: number; reference: string; status: string; created_at: string; tasks: CycleCountTask[]; }
-interface WavePlan { 
-  success: boolean; 
-  wave_id: string; 
-  pick_list: {
-    sku: string; 
-    total_qty: number; 
-    location: string; 
-    orders: string[]; 
-    order_ids: number[];
-  }[]; 
-}
+interface WavePlan { success: boolean; wave_id: string; pick_list: {sku: string, total_qty: number, location: string, orders: string[], order_ids: number[], status?: string}[]; }
+interface ReplenishTask { id: number; item_sku: string; source_location: string; dest_location: string; qty_to_move: number; status: 'PENDING'|'COMPLETED'; }
+interface BinConfig { id: number; location_code: string; item_sku: string; min_qty: number; max_qty: number; is_pick_face: boolean; }
 
 // --- HELPER COMPONENTS ---
 
@@ -80,6 +75,7 @@ const StatusBadge = ({ status }: { status: string }) => {
     RECEIVED: 'bg-teal-500/20 text-teal-800 border-teal-500/30',
     DRAFT: 'bg-slate-500/20 text-slate-800 border-slate-500/30',
     ORDERED: 'bg-blue-500/20 text-blue-800 border-blue-500/30',
+    COMPLETED: 'bg-green-500/20 text-green-800 border-green-500/30',
   };
   return (
     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${styles[status] || 'bg-gray-200 text-gray-700'} uppercase tracking-wide`}>
@@ -88,7 +84,7 @@ const StatusBadge = ({ status }: { status: string }) => {
   );
 };
 
-// --- MODALS & COMPONENTS ---
+// --- MODALS ---
 
 const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   const imageUrl = `http://api.labelary.com/v1/printers/8dpmm/labels/4x6/0/${encodeURIComponent(zpl)}`;
@@ -113,21 +109,72 @@ const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   );
 };
 
+// --- NEW: Quick Receive Modal (Ad-Hoc Receiving) ---
+const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        const form = e.target as HTMLFormElement;
+        const data = {
+            sku: (form.elements.namedItem('sku') as HTMLSelectElement).value,
+            location: (form.elements.namedItem('location') as HTMLSelectElement).value,
+            quantity: parseInt((form.elements.namedItem('quantity') as HTMLInputElement).value),
+            lot_number: (form.elements.namedItem('lot') as HTMLInputElement).value,
+            expiry_date: (form.elements.namedItem('expiry') as HTMLInputElement).value || null
+        };
+        onSubmit(data);
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in duration-200">
+            <div className="bg-white/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-8 shadow-2xl border border-white/40">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800"><ArrowDownCircle className="text-emerald-600"/> Quick Receive</h2>
+                    <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
+                </div>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Product (SKU)</label>
+                        <select name="sku" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" required>
+                            {items.map((i:any) => <option key={i.id} value={i.sku}>{i.sku} - {i.name}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Putaway Location</label>
+                        <select name="location" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1 font-mono" required>
+                            {locations.map((l:any) => <option key={l.id} value={l.location_code}>{l.location_code} ({l.location_type})</option>)}
+                        </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase">Quantity</label>
+                            <input name="quantity" type="number" min="1" defaultValue="1" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" required />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase">Lot # (Optional)</label>
+                            <input name="lot" placeholder="L-123" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase">Expiry (Optional)</label>
+                        <input name="expiry" type="date" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" />
+                    </div>
+                    <button type="submit" className="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-lg transition-transform active:scale-95 text-sm mt-2">Receive Stock</button>
+                </form>
+            </div>
+        </div>
+    );
+};
+
 const CreateOrderModal = ({ onClose, onSubmit, items }: any) => {
   const [formData, setFormData] = useState({
-    customer_name: '', customer_email: '', customer_address: '', customer_city: '', customer_state: '', customer_zip: '',
+    customer_name: '', customer_email: '', customer_address: '', 
+    customer_city: '', customer_state: '', customer_zip: '', customer_country: 'USA', // Added defaults
     sku: '', qty: 1
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.sku) return alert("Please select an SKU");
-    onSubmit({
-      ...formData,
-      order_number: `ORD-${Math.floor(Math.random() * 10000)}`,
-      qty: formData.qty,
-      sku: formData.sku
-    });
+    onSubmit(formData);
   };
 
   return (
@@ -142,10 +189,17 @@ const CreateOrderModal = ({ onClose, onSubmit, items }: any) => {
              <div className="space-y-3">
                 <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b pb-1">Customer Info</h3>
                 <input required value={formData.customer_name} onChange={e=>setFormData({...formData, customer_name: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Full Name" />
+                <input required value={formData.customer_email} onChange={e=>setFormData({...formData, customer_email: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Email (Optional)" />
                 <input required value={formData.customer_address} onChange={e=>setFormData({...formData, customer_address: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Address" />
-                <div className="flex gap-2">
+                
+                {/* Updated: City, State, Zip, Country Grid */}
+                <div className="grid grid-cols-2 gap-2">
                     <input required value={formData.customer_city} onChange={e=>setFormData({...formData, customer_city: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="City" />
-                    <input required value={formData.customer_zip} onChange={e=>setFormData({...formData, customer_zip: e.target.value})} className="w-24 bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="Zip" />
+                    <input required value={formData.customer_state} onChange={e=>setFormData({...formData, customer_state: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="State" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                    <input required value={formData.customer_zip} onChange={e=>setFormData({...formData, customer_zip: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="Zip Code" />
+                    <input required value={formData.customer_country} onChange={e=>setFormData({...formData, customer_country: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="Country" />
                 </div>
              </div>
              <div className="space-y-3">
@@ -155,6 +209,9 @@ const CreateOrderModal = ({ onClose, onSubmit, items }: any) => {
                     {items.map((i: any) => <option key={i.id} value={i.sku}>{i.sku} - {i.name}</option>)}
                 </select>
                 <input type="number" min="1" required value={formData.qty} onChange={e=>setFormData({...formData, qty: parseInt(e.target.value)})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" />
+                <div className="bg-blue-50 p-3 rounded-lg text-xs text-blue-700">
+                    <p>Note: Orders start in <strong>PENDING</strong> state. You must Allocate inventory to generate Pick tasks.</p>
+                </div>
              </div>
           </div>
           <button type="submit" className="w-full py-2.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg transition-transform active:scale-95 text-sm">Create Order</button>
@@ -163,6 +220,64 @@ const CreateOrderModal = ({ onClose, onSubmit, items }: any) => {
     </div>
   );
 };
+
+const CreateLocationModal = ({ onClose, onSubmit }: any) => {
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        const form = e.target as HTMLFormElement;
+        // Supports Visual Grid Fields (X, Y)
+        const data = {
+            location_code: (form.elements.namedItem('code') as HTMLInputElement).value.toUpperCase(),
+            location_type: (form.elements.namedItem('type') as HTMLSelectElement).value,
+            zone: (form.elements.namedItem('zone') as HTMLInputElement).value,
+            x: parseInt((form.elements.namedItem('x') as HTMLInputElement).value) || 0,
+            y: parseInt((form.elements.namedItem('y') as HTMLInputElement).value) || 0
+        };
+        onSubmit(data);
+    };
+  
+    return (
+      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in duration-200">
+        <div className="bg-white/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-8 shadow-2xl border border-white/40">
+          <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800"><MapIcon className="text-indigo-600"/> Add Location</h2>
+              <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
+          </div>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Code</label>
+                <input name="code" placeholder="A-01-01" className="w-full p-2 rounded-lg border border-slate-200 text-sm font-mono uppercase focus:ring-2 ring-indigo-500/20 outline-none" required autoFocus/>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Type</label>
+                    <select name="type" className="w-full p-2 rounded-lg border border-slate-200 text-sm outline-none" required>
+                        <option value="RESERVE">Reserve</option>
+                        <option value="PICK">Pick Face</option>
+                        <option value="DOCK">Dock</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Zone</label>
+                    <input name="zone" placeholder="Zone A" className="w-full p-2 rounded-lg border border-slate-200 text-sm outline-none" required />
+                </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+                <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Grid X</label>
+                    <input name="x" type="number" placeholder="0" className="w-full p-2 rounded-lg border border-slate-200 text-sm outline-none" />
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-500 uppercase">Grid Y</label>
+                    <input name="y" type="number" placeholder="0" className="w-full p-2 rounded-lg border border-slate-200 text-sm outline-none" />
+                </div>
+            </div>
+            <button type="submit" className="w-full py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 shadow-lg transition-transform active:scale-95 text-sm">Create Bin</button>
+          </form>
+        </div>
+      </div>
+    );
+  };
 
 const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
     const [selectedOrderId, setSelectedOrderId] = useState('');
@@ -208,143 +323,177 @@ const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
     )
 }
 
-// --- UNIVERSAL SCANNER ---
+// --- UNIVERSAL SCANNER (HARDENED + LOTS + VALIDATION) ---
 
-const UniversalScanner = ({ mode, data, onComplete, onBack, onUpdate }: any) => {
-    // Mode: CYCLE, WAVE, RECEIVE, MOVE
+const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate, onException }: any) => {
     const initialStep = mode === 'RECEIVE' ? 'SKU' : mode === 'MOVE' ? 'LOC' : 'LOC';
-    const [step, setStep] = useState<'LOC' | 'SKU' | 'QTY' | 'DEST'>(initialStep);
-    const [input, setInput] = useState('');
+    const [step, setStep] = useState<'LOC' | 'SKU' | 'QTY' | 'DEST' | 'LOT' | 'EXPIRY'>(initialStep);
+    
+    const [manualInput, setManualInput] = useState('');
     const [activeItem, setActiveItem] = useState<any>(null);
     
-    // For MOVE mode, we maintain temporary state for source loc/sku
+    // Move specific state
     const [moveSource, setMoveSource] = useState<string>('');
     const [moveSku, setMoveSku] = useState<string>('');
 
-    // Helper to get pending list (for list-based modes)
+    const playSound = (type: 'success' | 'error') => {
+        const freq = type === 'success' ? 1000 : 300;
+        const context = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const osc = context.createOscillator();
+        const gain = context.createGain();
+        osc.connect(gain);
+        gain.connect(context.destination);
+        osc.frequency.value = freq;
+        osc.type = type === 'success' ? 'sine' : 'sawtooth';
+        osc.start();
+        gain.gain.exponentialRampToValueAtTime(0.00001, context.currentTime + 0.3);
+    };
+
     const getPendingList = () => {
         if (mode === 'CYCLE') return data.tasks.filter((t:any) => t.status === 'PENDING');
         if (mode === 'WAVE') return data.pick_list.filter((p:any) => p.status !== 'PICKED');
         if (mode === 'RECEIVE') return data.lines.filter((l:any) => (l.received||0) < l.qty);
+        if (mode === 'REPLENISH') return data.filter((t:any) => t.status === 'PENDING');
         return [];
     };
 
     const pendingItems = getPendingList();
-    const totalItems = mode === 'CYCLE' ? data.tasks.length : mode === 'WAVE' ? data.pick_list.length : mode === 'RECEIVE' ? data.lines.length : 0;
+    const totalItems = mode === 'REPLENISH' ? data.length : (data.tasks || data.pick_list || data.lines || []).length;
     const progress = totalItems > 0 ? ((totalItems - pendingItems.length) / totalItems) * 100 : 0;
 
-    const handleInput = (e: React.FormEvent) => {
-        e.preventDefault();
+    const processScan = (scannedData: string) => {
+        const val = scannedData.trim().toUpperCase();
         
-        // --- MOVE MODE (No predefined list) ---
+        // --- 1. VALIDATE LOCATION SCAN ---
+        // If expecting a location, check against Master Layout
+        if ((step === 'LOC' || step === 'DEST') && locations) {
+            const isValidLoc = locations.some((l:any) => l.location_code === val);
+            if (!isValidLoc && mode !== 'MOVE') { 
+                 playSound('error');
+                 alert(`INVALID LOCATION: ${val}. Scan a bin from the Layout.`);
+                 return;
+            }
+        }
+
+        // --- MOVE MODE ---
         if (mode === 'MOVE') {
-            if (step === 'LOC') {
-                // Source Location
-                setMoveSource(input.toUpperCase());
-                setStep('SKU');
-                setInput('');
-            } else if (step === 'SKU') {
-                // Scan SKU
-                setMoveSku(input.toUpperCase());
-                setStep('QTY');
-                setInput('');
-            } else if (step === 'QTY') {
-                // Qty to move
-                const val = parseInt(input);
-                setActiveItem({ qty: val }); // Store qty in temp object
-                setStep('DEST');
-                setInput('');
-            } else if (step === 'DEST') {
-                // Destination Bin
-                const dest = input.toUpperCase();
-                onUpdate({ sku: moveSku, source_location: moveSource, dest_location: dest, quantity: activeItem.qty });
-                // Reset
-                setMoveSource(''); setMoveSku(''); setActiveItem(null);
-                setStep('LOC'); setInput('');
+            if (step === 'LOC') { setMoveSource(val); setStep('SKU'); playSound('success'); }
+            else if (step === 'SKU') { setMoveSku(val); setStep('QTY'); playSound('success'); }
+            else if (step === 'DEST') {
+                onUpdate({ sku: moveSku, source_location: moveSource, dest_location: val, quantity: activeItem?.qty || 1 });
+                setMoveSource(''); setMoveSku(''); setActiveItem(null); setStep('LOC');
+                playSound('success');
             }
             return;
         }
 
-        // --- OTHER MODES (List driven) ---
-        if(!activeItem) return;
-
-        // Receiving Logic (Unique Flow: SKU -> LOC -> QTY)
-        if (mode === 'RECEIVE') {
-            if (step === 'SKU') {
-                if (input.toUpperCase() === activeItem.sku) {
-                    setStep('LOC');
-                    setInput('');
-                } else { alert(`WRONG ITEM. Scan ${activeItem.sku}`); setInput(''); }
-            } else if (step === 'LOC') {
-                if(input.length > 3) { 
-                    setStep('QTY');
-                    setInput('');
-                } else { alert("Invalid Location Format"); setInput(''); }
-            } else if (step === 'QTY') {
-                const val = parseInt(input);
-                if (val > (activeItem.qty - (activeItem.received || 0))) {
-                    if(!confirm("Over-receiving? Proceed?")) return;
-                }
-                // We need to pass location back for receiving
-                onUpdate(activeItem, val, activeItem._tempLoc); 
-                setActiveItem(null);
-                setStep('SKU');
-                setInput('');
+        // --- AUTO-SELECT TASK ---
+        if (!activeItem) {
+            const pending = getPendingList();
+            // Try matching SKU (Product Scan)
+            const matchSku = pending.find((t:any) => (t.sku === val) || (t.item_sku === val));
+            if (matchSku) {
+                setActiveItem(matchSku);
+                // If Receiving, user verified item, now put it away.
+                if (mode === 'RECEIVE') setStep('LOC'); 
+                else setStep('LOC'); 
+                playSound('success');
+                return;
             }
+            // Try matching Location (Bin Scan)
+            const matchLoc = pending.find((t:any) => (t.location === val) || (t.source_location === val));
+            if (matchLoc) {
+                setActiveItem(matchLoc);
+                setStep('SKU');
+                playSound('success');
+                return;
+            }
+            playSound('error');
+            alert("Item not found in this list. Scan a Product SKU or valid Location to begin.");
             return;
         }
 
-        // Standard Logic (Cycle/Wave)
-        const targetLoc = activeItem.location;
-        const targetSku = mode === 'CYCLE' ? activeItem.item_sku : activeItem.sku;
-        const targetQty = mode === 'CYCLE' ? null : activeItem.total_qty;
+        const targetLoc = mode === 'REPLENISH' ? activeItem.source_location : activeItem.location;
+        const targetSku = mode === 'CYCLE' || mode === 'REPLENISH' ? activeItem.item_sku : activeItem.sku;
 
         if (step === 'LOC') {
-            if (input.toUpperCase() === targetLoc) {
-                setStep('SKU');
-                setInput('');
+            if (val === targetLoc || (mode === 'RECEIVE')) {
+                if(mode === 'RECEIVE') {
+                    activeItem._tempLoc = val;
+                    setStep('QTY'); 
+                } else {
+                    setStep('SKU');
+                }
+                playSound('success');
             } else {
-                alert(`WRONG LOCATION. Go to ${targetLoc}`);
-                setInput('');
+                playSound('error');
+                alert(`WRONG BIN! Expected: ${targetLoc}`);
             }
         } else if (step === 'SKU') {
-             if (input.toUpperCase() === targetSku) {
-                 setStep('QTY');
-                 setInput('');
-             } else {
-                 alert(`WRONG ITEM. Scan ${targetSku}`);
-                 setInput('');
-             }
-        } else if (step === 'QTY') {
-            const val = parseInt(input);
-            if (mode === 'WAVE' && val !== targetQty) {
-                if(!confirm(`Expected ${targetQty}, but you entered ${val}. Proceed?`)) return;
+            if (val === targetSku) {
+                if (mode === 'RECEIVE') setStep('LOC'); 
+                else setStep(mode === 'REPLENISH' ? 'DEST' : 'QTY');
+                playSound('success');
+            } else {
+                playSound('error');
+                alert(`WRONG ITEM! Expected: ${targetSku}`);
             }
-            onUpdate(activeItem, val);
-            setActiveItem(null);
-            setStep('LOC');
-            setInput('');
+        } else if (step === 'DEST') {
+             if (val === activeItem.dest_location) {
+                 onUpdate(activeItem); 
+                 resetCycle();
+                 playSound('success');
+             } else {
+                 playSound('error');
+                 alert(`WRONG DEST! Expected: ${activeItem.dest_location}`);
+             }
+        } else if (step === 'LOT') {
+            activeItem._lot = val;
+            setStep('EXPIRY');
+            playSound('success');
+        } else if (step === 'EXPIRY') {
+            onUpdate(activeItem, activeItem._qty, activeItem._tempLoc, activeItem._lot, val);
+            resetCycle();
+            playSound('success');
         }
     };
 
-    // Special handler to capture location for receiving
-    const handleReceivingLocInput = (val: string) => {
-        if(activeItem) activeItem._tempLoc = val; 
+    useScanDetection({ onScan: processScan });
+
+    const handleSubmitManual = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (step === 'QTY') {
+            const qty = parseInt(manualInput);
+            activeItem._qty = qty;
+            if (mode === 'RECEIVE') setStep('LOT'); 
+            else { onUpdate(activeItem, qty); resetCycle(); }
+            playSound('success');
+        } else if (step === 'LOT') {
+            activeItem._lot = manualInput;
+            setStep('EXPIRY');
+            playSound('success');
+        } else if (step === 'EXPIRY') {
+            onUpdate(activeItem, activeItem._qty, activeItem._tempLoc, activeItem._lot, manualInput);
+            resetCycle();
+            playSound('success');
+        } else {
+            processScan(manualInput);
+        }
+        setManualInput('');
     };
 
-    // Dynamic Header Title
-    const getTitle = () => {
-        if (mode === 'CYCLE') return 'Cycle Count';
-        if (mode === 'RECEIVE') return 'Inbound Receive';
-        if (mode === 'MOVE') return 'Internal Move';
-        return 'Wave Pick';
+    const resetCycle = () => {
+        setActiveItem(null);
+        setStep(mode === 'RECEIVE' ? 'SKU' : 'LOC');
+        setManualInput('');
     };
 
-    const getSubTitle = () => {
-        if (mode === 'CYCLE') return data.reference;
-        if (mode === 'RECEIVE') return data.po_number;
-        if (mode === 'WAVE') return data.wave_id;
-        return 'Ad-hoc Transfer';
+    const handleShortPick = () => {
+        if (!activeItem || mode !== 'WAVE') return;
+        if(confirm(`Report SHORT PICK for ${activeItem.sku}?`)) {
+            if (onException) onException(activeItem, 'SHORT_PICK');
+            resetCycle();
+        }
     };
 
     return (
@@ -354,92 +503,88 @@ const UniversalScanner = ({ mode, data, onComplete, onBack, onUpdate }: any) => 
              <div className="relative z-10 flex justify-between items-center p-4 border-b border-white/10 bg-white/5 backdrop-blur-md">
                 <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition-colors"><ArrowLeft size={20}/></button>
                 <div className="text-center">
-                    <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">{getTitle()}</div>
-                    <div className="font-mono font-bold">{getSubTitle()}</div>
+                    <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">{mode} MODE</div>
+                    <div className="font-mono font-bold">{activeItem ? (step) : 'SCAN LIST'}</div>
                 </div>
-                {mode !== 'MOVE' && <div className="text-xs font-bold bg-blue-600 px-2 py-1 rounded-md">{Math.round(progress || 0)}%</div>}
+                <div className="text-xs font-bold bg-blue-600 px-2 py-1 rounded-md">{Math.round(progress || 0)}%</div>
             </div>
 
-            {/* LIST VIEW (For Cycle, Wave, Receive) */}
-            {mode !== 'MOVE' && !activeItem ? (
+            {!activeItem ? (
                 <div className="relative z-10 flex-1 overflow-y-auto p-4 space-y-3">
                     {pendingItems.length === 0 && (
-                        <div className="h-full flex flex-col items-center justify-center text-emerald-400 animate-in zoom-in">
-                            <CheckCircle2 size={64} className="mb-4 drop-shadow-[0_0_15px_rgba(52,211,153,0.5)]"/>
-                            <h2 className="text-2xl font-bold">ALL DONE</h2>
-                            <button onClick={onComplete} className="mt-6 bg-emerald-600 text-white px-6 py-2 rounded-full font-bold shadow-lg shadow-emerald-900/50 hover:bg-emerald-500 transition-all">Finish Job</button>
+                        <div className="h-64 flex flex-col items-center justify-center text-emerald-400 animate-in zoom-in">
+                            <CheckCircle2 size={64} className="mb-4"/>
+                            <h2 className="text-2xl font-bold">JOB DONE</h2>
+                            <button onClick={onComplete} className="mt-6 bg-emerald-600 text-white px-6 py-2 rounded-full font-bold">Finish</button>
                         </div>
                     )}
                     {pendingItems.map((t:any) => (
-                        <button key={t.id || t.sku} onClick={() => { setActiveItem(t); setStep(mode === 'RECEIVE' ? 'SKU' : 'LOC'); }} 
-                            className="w-full bg-white/5 hover:bg-white/10 border border-white/5 p-4 rounded-xl flex justify-between items-center group transition-all duration-200 active:scale-[0.98]">
-                            <div className="text-left">
-                                {mode !== 'RECEIVE' && (
-                                    <div className="flex items-center gap-2 text-blue-300 font-mono text-lg font-bold">
-                                        <MapPin size={14}/> {t.location}
-                                    </div>
-                                )}
-                                <div className="text-sm text-slate-300 font-medium mt-1">
-                                    {mode === 'CYCLE' ? t.item_sku : t.sku}
-                                    {mode === 'RECEIVE' && <span className="text-xs text-slate-500 block">Expected: {t.qty - (t.received||0)}</span>}
+                        <button key={t.id || t.sku + t.location} onClick={() => { setActiveItem(t); setStep(mode === 'RECEIVE' ? 'SKU' : 'LOC'); }} 
+                            className="w-full bg-white/5 hover:bg-white/10 border border-white/5 p-4 rounded-xl flex justify-between items-center text-left group active:bg-blue-600/20">
+                            <div>
+                                <div className="font-mono text-xl font-bold text-yellow-400">
+                                    {mode==='REPLENISH' ? t.source_location : (mode==='RECEIVE' ? 'DOCK' : t.location)}
                                 </div>
-                                {mode === 'WAVE' && <div className="text-[10px] text-slate-500 mt-1">Orders: {t.orders.join(', ')}</div>}
+                                <div className="text-sm text-slate-300 font-medium mt-1 flex items-center gap-2">
+                                    <Box size={12}/> {mode === 'CYCLE' || mode === 'REPLENISH' ? t.item_sku : t.sku}
+                                </div>
                             </div>
-                            <div className="flex flex-col items-end">
-                                {mode === 'WAVE' && <div className="text-2xl font-bold text-white">x{t.total_qty}</div>}
-                                {mode === 'RECEIVE' && <div className="text-xl font-bold text-white">x{t.qty}</div>}
-                                <ChevronRight className="text-slate-600 group-hover:text-white transition-colors"/>
+                            <div className="text-right">
+                                <div className="text-2xl font-bold">{mode === 'WAVE' ? t.total_qty : (t.qty || t.qty_to_move)}</div>
+                                <div className="text-[10px] uppercase text-slate-500">Units</div>
                             </div>
                         </button>
                     ))}
                 </div>
             ) : (
-                // INPUT VIEW (For Active Item OR Move Mode)
                 <div className="relative z-10 flex-1 flex flex-col p-6 animate-in slide-in-from-right duration-300">
-                    <div className="bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-white/10 p-6 rounded-2xl mb-6 text-center relative overflow-hidden">
-                        <div className="absolute inset-0 bg-blue-500/10 blur-3xl"></div>
-                        <div className="relative z-10">
-                            <div className="text-[10px] font-bold text-blue-300 uppercase tracking-widest mb-2">
-                                {step === 'LOC' ? (mode==='RECEIVE'?'Scan Putaway Bin':'Go to Location') 
-                                : step === 'DEST' ? 'Scan Destination Bin'
-                                : step === 'SKU' ? 'Verify Item' 
-                                : 'Enter Quantity'}
+                    <div className="flex-1 flex flex-col justify-center items-center text-center space-y-6">
+                        <div className="bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-3xl w-full max-w-sm shadow-2xl relative overflow-hidden">
+                            <div className={`absolute inset-0 opacity-20 ${step === 'LOC' ? 'bg-yellow-500' : step === 'SKU' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
+                            <div className="relative z-10">
+                                <div className="text-xs font-bold uppercase tracking-widest opacity-70 mb-2">
+                                    {step === 'LOC' ? (mode === 'RECEIVE' ? 'Scan Putaway Bin' : 'Scan Location') 
+                                    : step === 'SKU' ? 'Scan Product' 
+                                    : step === 'LOT' ? 'Scan Lot Number' 
+                                    : step === 'EXPIRY' ? 'Scan/Enter Expiry' 
+                                    : 'Enter Quantity'}
+                                </div>
+                                <div className="text-6xl font-mono font-bold tracking-tighter mb-4">
+                                    {step === 'LOC' ? (mode==='RECEIVE' ? 'SCAN BIN' : mode==='REPLENISH'?activeItem.source_location:activeItem.location)
+                                    : step === 'SKU' ? (mode==='CYCLE'||mode==='REPLENISH'?activeItem.item_sku:activeItem.sku)
+                                    : step === 'DEST' ? activeItem.dest_location
+                                    : step === 'LOT' ? 'LOT #'
+                                    : step === 'EXPIRY' ? 'YYYY-MM-DD'
+                                    : (mode === 'WAVE' ? activeItem.total_qty : '?')}
+                                </div>
+                                <div className="text-sm bg-black/30 rounded-full px-3 py-1 inline-block">
+                                    {activeItem.item_name || "Item Verification"}
+                                </div>
                             </div>
-                            <div className="text-5xl font-bold font-mono text-white tracking-tight mb-2 drop-shadow-md">
-                                {mode === 'MOVE' 
-                                    ? (step==='LOC'?'FROM?':step==='DEST'?'TO?':step==='SKU'?moveSource:moveSku)
-                                    : step === 'LOC' ? (mode==='RECEIVE'?'?':activeItem.location) 
-                                    : step === 'QTY' ? (mode==='WAVE'?activeItem.total_qty:'?') 
-                                    : (mode==='CYCLE'?activeItem.item_sku:activeItem.sku)
-                                }
-                            </div>
-                             <div className="text-sm text-slate-400">
-                                {step === 'LOC' || step === 'DEST' ? 'Scan Bin Label' : step === 'SKU' ? 'Scan Product Barcode' : 'Confirm Count'}
-                             </div>
                         </div>
+                        {mode === 'WAVE' && step === 'LOC' && (
+                            <button onClick={handleShortPick} className="text-red-400 text-sm font-bold border border-red-500/30 px-4 py-2 rounded-full hover:bg-red-500/20">
+                                Cannot find item? (Short Pick)
+                            </button>
+                        )}
                     </div>
 
-                    <form onSubmit={handleInput} className="flex-1 flex flex-col justify-end pb-8">
-                        <div className="relative mb-4">
-                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">
-                                {step === 'QTY' ? <div className="font-bold text-xs">QTY</div> : <Barcode/>}
-                            </div>
+                    <form onSubmit={handleSubmitManual} className="mt-auto pt-6">
+                        <div className="relative">
+                            <Scan className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"/>
                             <input 
                                 autoFocus
-                                value={input} 
-                                onChange={e => {
-                                    setInput(e.target.value);
-                                    if(step === 'LOC' && mode === 'RECEIVE') handleReceivingLocInput(e.target.value);
-                                }} 
+                                value={manualInput}
+                                onChange={e => setManualInput(e.target.value)}
                                 type={step === 'QTY' ? 'number' : 'text'}
-                                className="w-full bg-black/50 border border-white/20 rounded-2xl py-6 pl-12 pr-6 text-2xl font-mono text-white placeholder-slate-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 transition-all shadow-inner"
-                                placeholder={step === 'LOC' || step === 'DEST' ? 'Scan Bin...' : step === 'SKU' ? 'Scan SKU...' : '0'} 
+                                className="w-full bg-black/50 border border-white/20 rounded-2xl py-4 pl-12 pr-4 text-xl font-mono text-white placeholder-slate-600 outline-none focus:border-blue-500"
+                                placeholder={step === 'QTY' ? "Enter Qty..." : step === 'EXPIRY' ? "YYYY-MM-DD" : "Manual Entry..."}
                             />
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
-                            <button type="button" onClick={() => {setActiveItem(null); setInput(''); if(mode==='MOVE') setStep('LOC');}} className="py-4 rounded-xl font-bold text-slate-400 hover:bg-white/5 transition-colors">Cancel</button>
-                            <button type="submit" className="py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-900/40 transition-transform active:scale-95">
-                                {step === 'QTY' && mode !== 'MOVE' ? 'CONFIRM' : step === 'DEST' ? 'FINISH' : 'NEXT'}
+                        <div className="grid grid-cols-2 gap-4 mt-4">
+                            <button type="button" onClick={resetCycle} className="py-4 rounded-xl font-bold text-slate-400 bg-white/5 hover:bg-white/10">Cancel</button>
+                            <button type="submit" className="py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg">
+                                {step === 'QTY' ? 'Confirm Qty' : 'Enter'}
                             </button>
                         </div>
                     </form>
@@ -525,17 +670,20 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
 export default function App() {
   const [activeTab, setActiveTab] = useState('Overview');
   const [tabHistory, setTabHistory] = useState<string[]>([]);
-  const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE' | 'RECEIVE' | 'MOVE'>('IDLE');
+  const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE' | 'RECEIVE' | 'MOVE' | 'REPLENISH'>('IDLE');
   
   // Data
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [items, setItems] = useState<ItemMaster[]>([]);
+  const [locations, setLocations] = useState<LocationMaster[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [rmas, setRmas] = useState<RMA[]>([]);
   const [history, setHistory] = useState<LogItem[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [counts, setCounts] = useState<CycleCountSession[]>([]);
+  const [replenishTasks, setReplenishTasks] = useState<ReplenishTask[]>([]);
+  const [binConfigs, setBinConfigs] = useState<BinConfig[]>([]);
   
   // Features
   const [selectedOrders, setSelectedOrders] = useState<number[]>([]);
@@ -544,15 +692,21 @@ export default function App() {
   const [activePO, setActivePO] = useState<PurchaseOrder | null>(null);
   const [packingOrder, setPackingOrder] = useState<Order | null>(null);
   
+  // Visual Map State
+  const [activeZone, setActiveZone] = useState<string>('All');
+  const [selectedLocation, setSelectedLocation] = useState<LocationMaster | null>(null);
+
   // Modals
   const [showOrderModal, setShowOrderModal] = useState(false);
+  const [showLocationModal, setShowLocationModal] = useState(false);
   const [showRMAModal, setShowRMAModal] = useState(false);
+  const [showQuickReceive, setShowQuickReceive] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
   const [currentZpl, setCurrentZpl] = useState('');
 
   const fetchAll = async () => {
     try {
-      const [inv, ord, rm, hist, stat, cnt, po, itm] = await Promise.all([
+      const [inv, ord, rm, hist, stat, cnt, po, itm, rep, cfg, locs] = await Promise.all([
         fetch(`${API_URL}/inventory/`).then(r=>r.json()),
         fetch(`${API_URL}/orders/`).then(r=>r.json()),
         fetch(`${API_URL}/rmas/`).then(r=>r.json()),
@@ -561,6 +715,9 @@ export default function App() {
         fetch(`${API_URL}/cycle-counts/`).then(r=>r.json()),
         fetch(`${API_URL}/purchase-orders/`).then(r=>r.json()),
         fetch(`${API_URL}/items/`).then(r=>r.json()),
+        fetch(`${API_URL}/replenishment-tasks/`).then(r=>r.json()),
+        fetch(`${API_URL}/replenishment-rules/`).then(r=>r.json()),
+        fetch(`${API_URL}/locations/`).then(r=>r.json()),
       ]);
       setInventory(inv);
       setOrders(ord);
@@ -570,6 +727,9 @@ export default function App() {
       setCounts(cnt);
       setPos(po);
       setItems(itm);
+      setReplenishTasks(rep);
+      setBinConfigs(cfg);
+      setLocations(locs);
     } catch(e) { console.error(e); }
   };
 
@@ -607,17 +767,32 @@ export default function App() {
       const item = items.find(i => i.sku === data.sku);
       if(!item) return alert("Invalid SKU");
       const payload = {
-          order_number: data.order_number,
+          order_number: `ORD-${Math.floor(Math.random()*9000)+1000}`, // Auto-gen
           customer_name: data.customer_name,
           customer_email: data.customer_email,
           customer_address: data.customer_address,
           customer_city: data.customer_city,
           customer_state: data.customer_state,
           customer_zip: data.customer_zip,
+          customer_country: data.customer_country,
           lines: [{ item: item.id, qty_ordered: data.qty }]
       };
       const res = await fetch(`${API_URL}/orders/`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
-      if(res.ok) { setShowOrderModal(false); fetchAll(); }
+      if(res.ok) { setShowOrderModal(false); fetchAll(); } else { alert("Error creating order"); }
+  };
+
+  const handleQuickReceive = async (data: any) => {
+      const res = await fetch(`${API_URL}/inventory/receive/`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+      });
+      if (res.ok) { 
+          setShowQuickReceive(false); 
+          alert("Received Successfully!"); 
+          fetchAll(); 
+      } else { 
+          const err = await res.json();
+          alert("Error: " + err.error); 
+      }
   };
 
   const handleGenerateWave = async () => {
@@ -655,6 +830,33 @@ export default function App() {
       }
   };
 
+  const handleScannerException = async (item: any, type: string) => {
+      if (type === 'SHORT_PICK') {
+          const orderId = item.order_ids[0]; 
+          
+          const res = await fetch(`${API_URL}/orders/${orderId}/short_pick/`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ 
+                  sku: item.sku, 
+                  location: item.location, 
+                  qty: item.total_qty 
+              })
+          });
+          
+          if(res.ok) {
+              alert("Short Pick Recorded. Cycle Count Generated.");
+              fetchAll(); 
+              if(activeWave) {
+                  const updatedList = activeWave.pick_list.filter(p => p.sku !== item.sku || p.location !== item.location);
+                  setActiveWave({...activeWave, pick_list: updatedList});
+              }
+          } else {
+              alert("Error recording short pick");
+          }
+      }
+  };
+
   const handleCycleCountSubmit = async (taskId: number, qty: number) => {
       const res = await fetch(`${API_URL}/cycle-counts/${activeCount?.id}/submit_task/`, {
           method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ task_id: taskId, qty })
@@ -667,10 +869,17 @@ export default function App() {
       }
   };
 
-  const handleReceiveSubmit = async (item: any, qty: number, loc: string) => {
+  const handleReceiveSubmit = async (item: any, qty: number, loc: string, lot?: string, expiry?: string) => {
       if(!activePO) return;
       const res = await fetch(`${API_URL}/purchase-orders/${activePO.id}/receive_item/`, {
-          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sku: item.sku, location: loc, qty: qty })
+          method: 'POST', headers: {'Content-Type': 'application/json'}, 
+          body: JSON.stringify({ 
+              sku: item.sku, 
+              location: loc, 
+              qty: qty,
+              lot_number: lot,
+              expiry_date: expiry
+          })
       });
       if(res.ok) {
           const updatedPos = await fetch(`${API_URL}/purchase-orders/`).then(r=>r.json());
@@ -688,10 +897,95 @@ export default function App() {
       else { const err = await res.json(); alert("Error: " + err.error); }
   };
 
+  const handleReplenishSubmit = async (task: any) => {
+      await fetch(`${API_URL}/replenishment-tasks/${task.id}/complete/`, { method: 'POST' });
+      setReplenishTasks(prev => prev.map(t => t.id === task.id ? {...t, status: 'COMPLETED'} : t));
+  };
+
+  const handleGenerateReplenish = async () => {
+      await fetch(`${API_URL}/replenishment-tasks/generate/`, { method: 'POST' });
+      fetchAll();
+  };
+
+  const handleAddRule = async (e: React.FormEvent) => {
+      e.preventDefault();
+      const form = e.target as HTMLFormElement;
+      const data = {
+          location_code: (form.elements.namedItem('loc') as HTMLSelectElement).value,
+          item: (form.elements.namedItem('item') as HTMLSelectElement).value,
+          min_qty: parseInt((form.elements.namedItem('min') as HTMLInputElement).value),
+          max_qty: parseInt((form.elements.namedItem('max') as HTMLInputElement).value),
+          is_pick_face: true
+      };
+      await fetch(`${API_URL}/replenishment-rules/`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+      form.reset();
+      fetchAll();
+  };
+
+  const handleCreateLocation = async (data: any) => {
+      const res = await fetch(`${API_URL}/locations/`, { 
+          method: 'POST', 
+          headers: {'Content-Type': 'application/json'}, 
+          body: JSON.stringify(data) 
+      });
+      if (res.ok) {
+          setShowLocationModal(false);
+          fetchAll();
+      } else {
+          alert("Error creating location");
+      }
+  };
+
+  const handleReportMissing = async (loc: string) => {
+    if(!confirm(`Report items missing in ${loc}? This will lock the bin and generate a count task.`)) return;
+    
+    const res = await fetch(`${API_URL}/cycle-counts/create_for_location/`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ location: loc })
+    });
+    
+    const data = await res.json();
+    if(res.ok) {
+        alert(data.message);
+        setSelectedLocation(null); 
+        fetchAll(); 
+    } else {
+        alert("Error: " + data.error);
+    }
+  };
+
   const handleOrderAction = async (id: number, action: string) => {
       if(!confirm(`Confirm ${action}?`)) return;
-      await fetch(`${API_URL}/orders/${id}/${action}/`, { method: 'POST' });
-      fetchAll();
+      
+      try {
+          const res = await fetch(`${API_URL}/orders/${id}/${action}/`, { 
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+              }
+          });
+          
+          const data = await res.json();
+
+          if (!res.ok) {
+              // Handle Backend Errors (e.g. 400, 500)
+              alert(`Error: ${data.error || 'Action failed'}`);
+          } else {
+              // Handle Logical "Failures" (e.g. Not enough stock)
+              if (action === 'allocate') {
+                  if (data.status === 'PENDING') {
+                      alert("⚠️ Allocation Incomplete: Not enough stock to fulfill this order. Status remains PENDING.");
+                  } else if (data.status === 'ALLOCATED') {
+                      alert("✅ Order Successfully Allocated!");
+                  }
+              }
+              fetchAll(); // Refresh UI
+          }
+      } catch (e) {
+          console.error("Network Error:", e);
+          alert("Connection Error: Is the backend running?");
+      }
   };
 
   const handleGenerateLabel = async (id: number) => {
@@ -722,20 +1016,30 @@ export default function App() {
           <div className="h-screen w-screen bg-black flex items-center justify-center">
               <div className="w-full max-w-md h-[90vh]">
                   {scannerMode === 'WAVE' && activeWave && (
-                      <UniversalScanner mode="WAVE" data={activeWave} onUpdate={handleWavePickSubmit} onBack={() => setScannerMode('IDLE')}
-                        onComplete={() => { alert("Wave Complete!"); setScannerMode('IDLE'); setActiveWave(null); setSelectedOrders([]); fetchAll(); }} />
+                      <UniversalScanner 
+                        mode="WAVE" 
+                        data={activeWave} 
+                        locations={locations}
+                        onUpdate={handleWavePickSubmit} 
+                        onException={handleScannerException}
+                        onBack={() => setScannerMode('IDLE')}
+                        onComplete={() => { alert("Wave Complete!"); setScannerMode('IDLE'); setActiveWave(null); setSelectedOrders([]); fetchAll(); }} 
+                      />
                   )}
                   {scannerMode === 'CYCLE' && activeCount && (
-                      <UniversalScanner mode="CYCLE" data={activeCount} onUpdate={(item:any, qty:number) => handleCycleCountSubmit(item.id, qty)} onBack={() => setScannerMode('IDLE')}
+                      <UniversalScanner mode="CYCLE" data={activeCount} locations={locations} onUpdate={(item:any, qty:number) => handleCycleCountSubmit(item.id, qty)} onBack={() => setScannerMode('IDLE')}
                         onComplete={() => { alert("Count Complete!"); setScannerMode('IDLE'); setActiveCount(null); fetchAll(); }} />
                   )}
                   {scannerMode === 'RECEIVE' && activePO && (
-                      <UniversalScanner mode="RECEIVE" data={activePO} onUpdate={(item:any, qty:number, loc: string) => handleReceiveSubmit(item, qty, loc)} onBack={() => setScannerMode('IDLE')}
+                      <UniversalScanner mode="RECEIVE" data={activePO} locations={locations} onUpdate={(item:any, qty:number, loc: string, lot: string, exp: string) => handleReceiveSubmit(item, qty, loc, lot, exp)} onBack={() => setScannerMode('IDLE')}
                         onComplete={() => { alert("Receiving Complete!"); setScannerMode('IDLE'); setActivePO(null); fetchAll(); }} />
                   )}
                   {scannerMode === 'MOVE' && (
-                      <UniversalScanner mode="MOVE" data={{reference:'Ad-Hoc Move'}} onUpdate={handleMoveSubmit} onBack={() => setScannerMode('IDLE')}
+                      <UniversalScanner mode="MOVE" data={{reference:'Ad-Hoc Move'}} locations={locations} onUpdate={handleMoveSubmit} onBack={() => setScannerMode('IDLE')}
                         onComplete={() => { setScannerMode('IDLE'); fetchAll(); }} />
+                  )}
+                  {scannerMode === 'REPLENISH' && (
+                      <UniversalScanner mode="REPLENISH" data={replenishTasks} locations={locations} onUpdate={handleReplenishSubmit} onBack={()=>setScannerMode('IDLE')} onComplete={()=>{setScannerMode('IDLE'); fetchAll();}} />
                   )}
               </div>
           </div>
@@ -744,20 +1048,27 @@ export default function App() {
 
   return (
     <div className="h-screen w-screen bg-[url('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop')] bg-cover bg-center overflow-hidden flex flex-col items-center justify-center p-6 text-slate-800 font-sans selection:bg-blue-200">
+      <style>{`
+        .macos-scrollbar::-webkit-scrollbar { background: transparent; width: 8px; height: 8px; }
+        .macos-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(0, 0, 0, 0.2); border-radius: 4px; }
+        .macos-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(0, 0, 0, 0.3); }
+      `}</style>
       {showLabel && <LabelModal zpl={currentZpl} onClose={()=>setShowLabel(false)} />}
       {showOrderModal && <CreateOrderModal items={items} onClose={()=>setShowOrderModal(false)} onSubmit={handleCreateOrder} />}
       {showRMAModal && <CreateRMAModal orders={orders} onClose={()=>setShowRMAModal(false)} onSubmit={handleCreateRMA} />}
+      {showLocationModal && <CreateLocationModal onClose={()=>setShowLocationModal(false)} onSubmit={handleCreateLocation} />}
+      {showQuickReceive && <QuickReceiveModal items={items} locations={locations} onClose={()=>setShowQuickReceive(false)} onSubmit={handleQuickReceive} />}
 
       <div className="w-full max-w-[1400px] h-[85vh] bg-white/60 backdrop-blur-2xl rounded-[2rem] shadow-2xl border border-white/40 flex flex-col relative overflow-hidden animate-in fade-in zoom-in duration-500">
         
         {/* Toolbar */}
         <div className="h-12 flex items-center justify-between px-6 bg-white/10 border-b border-black/5 shrink-0">
             <div className="flex items-center gap-4 w-40"><MacTrafficLights onRed={() => setActiveTab('Overview')} onYellow={handleBack} onGreen={toggleFullscreen} /></div>
-            <div className="font-semibold text-sm text-slate-600/80 flex items-center gap-2"><Layers size={14} className="text-blue-600"/> NexWMS <span className="text-slate-400">v2.0</span></div>
+            <div className="font-semibold text-sm text-slate-600/80 flex items-center gap-2"><Layers size={14} className="text-blue-600"/> NexWMS <span className="text-slate-400">v3.0</span></div>
             <div className="w-40 flex justify-end"><button onClick={fetchAll} className="p-1.5 hover:bg-black/5 rounded-md transition-colors text-slate-500"><RefreshCw size={14}/></button></div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-8 scroll-smooth">
+        <div className="flex-1 overflow-y-auto p-8 scroll-smooth macos-scrollbar">
             
             {activeTab === 'Packing' && packingOrder ? (
                 <PackingStationUI order={packingOrder} onBack={() => setPackingOrder(null)} onComplete={() => { setPackingOrder(null); fetchAll(); }} onPrint={(zpl) => { setCurrentZpl(zpl); setShowLabel(true); }} />
@@ -776,6 +1087,129 @@ export default function App() {
                     </div>
                 </div>
             ) : null}
+
+            {activeTab === 'Waves' && (
+                <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-center mb-6">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800">Wave Planning</h2>
+                            <p className="text-slate-500 text-sm">Group allocated orders into optimized pick paths.</p>
+                        </div>
+                        {activeWave ? (
+                            <div className="flex gap-2">
+                                <button onClick={() => setActiveWave(null)} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-lg transition-colors">Discard</button>
+                                <button onClick={() => setScannerMode('WAVE')} className="bg-blue-600 text-white px-6 py-2 rounded-lg shadow-lg font-bold flex items-center gap-2 animate-pulse hover:bg-blue-700 transition-all">
+                                    <Play size={18} /> Start Picking
+                                </button>
+                            </div>
+                        ) : (
+                            <button 
+                                disabled={selectedOrders.length === 0}
+                                onClick={handleGenerateWave}
+                                className="bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-2 rounded-lg shadow-lg font-bold transition-all flex items-center gap-2 hover:bg-indigo-700 active:scale-95"
+                            >
+                                <Layers size={18} /> Generate Wave ({selectedOrders.length})
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-12 gap-6">
+                        {/* Left Column: Order Selection */}
+                        <div className="col-span-5 flex flex-col gap-4 h-[600px]">
+                            <div className="flex justify-between items-center">
+                                <div className="font-bold text-slate-600 text-sm uppercase tracking-wider">Ready for Picking</div>
+                                <div className="text-xs text-slate-400">{orders.filter(o => o.status === 'ALLOCATED').length} Orders</div>
+                            </div>
+                            
+                            <div className="flex-1 overflow-y-auto space-y-3 pr-2 scroll-smooth macos-scrollbar">
+                                {orders.filter(o => o.status === 'ALLOCATED').length === 0 && (
+                                    <div className="text-center py-10 text-slate-400 italic border-2 border-dashed border-slate-200 rounded-xl">
+                                        <PackageCheck size={48} className="mx-auto mb-2 opacity-20"/>
+                                        No allocated orders found.<br/>
+                                        <span className="text-xs">Go to "Orders" and click Allocate.</span>
+                                    </div>
+                                )}
+                                {orders.filter(o => o.status === 'ALLOCATED').map(order => {
+                                    const isSelected = selectedOrders.includes(order.id);
+                                    return (
+                                        <div 
+                                            key={order.id}
+                                            onClick={() => !activeWave && setSelectedOrders(prev => isSelected ? prev.filter(id => id !== order.id) : [...prev, order.id])}
+                                            className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 ${isSelected ? 'border-indigo-500 bg-indigo-50 shadow-md' : 'border-white bg-white/60 hover:border-indigo-200 hover:bg-white'} ${activeWave ? 'opacity-50 pointer-events-none' : ''}`}
+                                        >
+                                            <div className="flex justify-between items-start">
+                                                <div>
+                                                    <div className={`font-bold ${isSelected ? 'text-indigo-700' : 'text-slate-700'}`}>{order.order_number}</div>
+                                                    <div className="text-xs text-slate-500">{order.customer_name}</div>
+                                                </div>
+                                                {isSelected ? <CheckCircle2 size={20} className="text-indigo-600 fill-indigo-100"/> : <div className="w-5 h-5 rounded-full border-2 border-slate-300"/>}
+                                            </div>
+                                            <div className="mt-3 pt-3 border-t border-black/5 flex justify-between items-center text-xs">
+                                                <span className="font-mono text-slate-500">{new Date(order.created_at).toLocaleDateString()}</span>
+                                                <span className="font-bold bg-white px-2 py-1 rounded border border-slate-200">{order.lines.length} Items</span>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Right Column: Wave Preview */}
+                        <div className="col-span-7">
+                            {activeWave ? (
+                                <GlassCard className="h-full flex flex-col relative overflow-hidden animate-in zoom-in duration-300">
+                                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"/>
+                                    <div className="flex justify-between items-center mb-6">
+                                        <div>
+                                            <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1">Active Wave Plan</div>
+                                            <div className="text-4xl font-mono font-bold text-slate-800 tracking-tight">{activeWave.wave_id}</div>
+                                        </div>
+                                        <div className="text-right bg-slate-50 px-4 py-2 rounded-xl border border-slate-100">
+                                            <div className="text-3xl font-bold text-slate-700">{activeWave.pick_list.length}</div>
+                                            <div className="text-[10px] font-bold text-slate-400 uppercase">Total Tasks</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="flex-1 overflow-y-auto bg-slate-50/50 rounded-xl border border-slate-100 p-2 space-y-2 macos-scrollbar">
+                                        {activeWave.pick_list.map((task: any, idx: number) => (
+                                            <div key={idx} className="bg-white p-4 rounded-lg border border-slate-200 flex justify-between items-center shadow-sm hover:shadow-md transition-shadow">
+                                                <div className="flex items-center gap-4">
+                                                    <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-xs font-mono">{idx + 1}</div>
+                                                    <div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="font-bold text-lg text-slate-700">{task.sku}</span>
+                                                            {task.status === 'PICKED' && <CheckCircle2 size={14} className="text-green-500"/>}
+                                                        </div>
+                                                        <div className="flex items-center gap-1 text-xs text-slate-500 font-mono bg-yellow-50 px-1.5 py-0.5 rounded w-fit border border-yellow-100">
+                                                            <MapPin size={10}/> {task.location}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="font-bold text-xl text-slate-800">x{task.total_qty}</div>
+                                                    <div className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${task.status === 'PICKED' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
+                                                        {task.status || 'PENDING'}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </GlassCard>
+                            ) : (
+                                <div className="h-full border-2 border-dashed border-slate-300 rounded-3xl flex flex-col items-center justify-center text-slate-400 gap-6 bg-slate-50/50">
+                                    <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center shadow-sm">
+                                        <Layers size={40} className="text-indigo-200"/>
+                                    </div>
+                                    <div className="text-center">
+                                        <h3 className="font-bold text-slate-600 text-lg">No Wave Generated</h3>
+                                        <p className="text-sm max-w-xs mx-auto mt-1">Select allocated orders from the left to generate an optimized picking path.</p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {activeTab === 'Moves' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
@@ -801,8 +1235,220 @@ export default function App() {
                 </div>
             )}
 
+            {activeTab === 'Replenish' && (
+                <div className="max-w-6xl mx-auto grid grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4">
+                    <div className="col-span-2 space-y-6">
+                        <div className="flex justify-between items-center">
+                            <div><h2 className="text-2xl font-bold text-slate-800">Replenishment Tasks</h2><p className="text-slate-500 text-sm">Moves required to refill pick faces.</p></div>
+                            <div className="flex gap-2">
+                                <button onClick={handleGenerateReplenish} className="bg-blue-100 text-blue-700 px-4 py-2 rounded-lg font-bold text-sm hover:bg-blue-200">Run Analysis</button>
+                                <button onClick={()=>setScannerMode('REPLENISH')} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-lg flex items-center gap-2"><Play size={16}/> Start Job</button>
+                            </div>
+                        </div>
+                        <GlassCard noPad className="overflow-hidden">
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">Status</th><th className="p-4">Item</th><th className="p-4">From (Reserve)</th><th className="p-4">To (Pick)</th><th className="p-4 text-right">Qty</th></tr></thead>
+                                <tbody className="divide-y divide-black/5">
+                                    {replenishTasks.map(t => (
+                                        <tr key={t.id} className="hover:bg-blue-50/20 transition-colors">
+                                            <td className="p-4"><StatusBadge status={t.status}/></td>
+                                            <td className="p-4 font-bold text-slate-700">{t.item_sku}</td>
+                                            <td className="p-4 font-mono text-slate-500">{t.source_location}</td>
+                                            <td className="p-4 font-mono text-blue-600 font-bold">{t.dest_location}</td>
+                                            <td className="p-4 text-right font-bold">{t.qty_to_move}</td>
+                                        </tr>
+                                    ))}
+                                    {replenishTasks.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No active tasks. Run analysis to check levels.</td></tr>}
+                                </tbody>
+                            </table>
+                        </GlassCard>
+                    </div>
+                    <div className="space-y-6">
+                        <h3 className="font-bold text-slate-700 flex items-center gap-2"><Settings2 size={18}/> Pick Face Rules</h3>
+                        <GlassCard className="p-4 space-y-4">
+                            <form onSubmit={handleAddRule} className="space-y-3">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">Location</label>
+                                    <select name="loc" className="w-full p-2 rounded border border-slate-200 text-sm mt-1" required>
+                                        <option value="">Select Bin...</option>
+                                        {locations.filter(l => l.location_type === 'PICK').map(l => (
+                                            <option key={l.id} value={l.location_code}>{l.location_code} ({l.zone})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-500 uppercase">Item</label>
+                                    <select name="item" className="w-full p-2 rounded border border-slate-200 text-sm mt-1" required>
+                                        <option value="">Select SKU...</option>
+                                        {items.map(i=><option key={i.id} value={i.id}>{i.sku}</option>)}
+                                    </select>
+                                </div>
+                                <div className="flex gap-2">
+                                    <div className="w-1/2">
+                                        <label className="text-[10px] font-bold text-slate-500 uppercase">Min</label>
+                                        <input name="min" type="number" placeholder="Min" className="w-full p-2 rounded border border-slate-200 text-sm mt-1" required/>
+                                    </div>
+                                    <div className="w-1/2">
+                                        <label className="text-[10px] font-bold text-slate-500 uppercase">Max</label>
+                                        <input name="max" type="number" placeholder="Max" className="w-full p-2 rounded border border-slate-200 text-sm mt-1" required/>
+                                    </div>
+                                </div>
+                                <button className="w-full bg-slate-800 text-white py-2 rounded-lg font-bold text-sm">Add Rule</button>
+                            </form>
+                            <div className="border-t pt-4 space-y-2">
+                                {binConfigs.map(c => (
+                                    <div key={c.id} className="flex justify-between text-xs bg-white/50 p-2 rounded border border-white">
+                                        <span className="font-mono font-bold">{c.location_code}</span>
+                                        <span>{c.item_sku}</span>
+                                        <span className="text-slate-500">{c.min_qty} - {c.max_qty}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </GlassCard>
+                    </div>
+                </div>
+            )}
+
+            {/* --- VISUAL WAREHOUSE MAP --- */}
+            {activeTab === 'Layout' && (
+                <div className="max-w-[1400px] mx-auto h-full flex flex-col animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-center mb-4 shrink-0">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800">Warehouse Map</h2>
+                            <p className="text-slate-500 text-sm">Interactive grid view. Click a bin to audit.</p>
+                        </div>
+                        
+                        <div className="flex gap-2">
+                            {/* Zone Filter */}
+                            <div className="flex gap-2 bg-white/50 p-1 rounded-xl border border-white/60 shadow-sm">
+                                {['All', ...Array.from(new Set(locations.map(l => l.zone)))].map(z => (
+                                    <button 
+                                        key={z} 
+                                        onClick={() => setActiveZone(z)}
+                                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${activeZone === z ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-white'}`}
+                                    >
+                                        {z || 'No Zone'}
+                                    </button>
+                                ))}
+                            </div>
+                            <button 
+                                onClick={() => setShowLocationModal(true)}
+                                className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-bold text-sm shadow-lg hover:bg-indigo-700 flex items-center gap-2"
+                            >
+                                <Plus size={16}/> Add Bin
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex gap-6 h-full overflow-hidden">
+                        {/* The Visual Grid */}
+                        <GlassCard noPad className="flex-1 relative bg-slate-50/50 overflow-hidden border-slate-200">
+                            <div className="absolute inset-0 p-8 overflow-auto macos-scrollbar">
+                                {/* Grid Container - Assuming 20x20 grid for this example */}
+                                <div className="relative w-[800px] h-[600px] bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:20px_20px]">
+                                    {locations
+                                        .filter(l => activeZone === 'All' || l.zone === activeZone)
+                                        .map(loc => {
+                                            // Calculate items in this bin
+                                            const itemCount = inventory.filter(i => i.location_code === loc.location_code).reduce((a,b) => a + b.quantity, 0);
+                                            const isOccupied = itemCount > 0;
+                                            
+                                            return (
+                                                <button
+                                                    key={loc.id}
+                                                    onClick={() => setSelectedLocation(loc)}
+                                                    style={{ 
+                                                        left: `${loc.x * 40}px`, // 40px multiplier for grid spacing
+                                                        top: `${loc.y * 40}px` 
+                                                    }}
+                                                    className={`absolute w-8 h-8 rounded-md shadow-sm border transition-all hover:scale-125 hover:z-10 flex items-center justify-center group
+                                                        ${loc.location_type === 'PICK' ? 'rounded-full' : 'rounded-md'}
+                                                        ${isOccupied ? 'bg-blue-500 border-blue-600 text-white' : 'bg-white border-slate-300 text-slate-300'}
+                                                    `}
+                                                >
+                                                    {/* Tooltip */}
+                                                    <span className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-20">
+                                                        {loc.location_code}
+                                                    </span>
+                                                    
+                                                    {/* Icon */}
+                                                    <Box size={14} className={isOccupied ? "fill-blue-400/50" : ""} />
+                                                    
+                                                    {/* Badge for Qty */}
+                                                    {isOccupied && (
+                                                        <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full text-[8px] flex items-center justify-center border border-white">
+                                                            {inventory.filter(i=>i.location_code===loc.location_code).length}
+                                                        </span>
+                                                    )}
+                                                </button>
+                                            );
+                                    })}
+                                </div>
+                            </div>
+                        </GlassCard>
+
+                        {/* Side Panel: Location Inspector */}
+                        <div className="w-80 shrink-0 flex flex-col">
+                            {selectedLocation ? (
+                                <GlassCard className="h-full flex flex-col animate-in slide-in-from-right">
+                                    <div className="flex justify-between items-start mb-6">
+                                        <div>
+                                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Inspector</div>
+                                            <h3 className="text-3xl font-bold text-slate-800 font-mono">{selectedLocation.location_code}</h3>
+                                            <div className="flex gap-2 mt-2">
+                                                <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{selectedLocation.location_type}</span>
+                                                <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{selectedLocation.zone}</span>
+                                            </div>
+                                        </div>
+                                        <button onClick={() => setSelectedLocation(null)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+                                    </div>
+
+                                    <div className="flex-1 overflow-y-auto -mx-2 px-2 space-y-2 macos-scrollbar">
+                                        <div className="text-xs font-bold text-slate-400 uppercase mb-2">Contents</div>
+                                        {inventory.filter(i => i.location_code === selectedLocation.location_code).length === 0 ? (
+                                            <div className="text-center py-8 text-slate-400 italic bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                                                Bin is empty
+                                            </div>
+                                        ) : (
+                                            inventory.filter(i => i.location_code === selectedLocation.location_code).map(inv => (
+                                                <div key={inv.id} className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                                                    <div className="font-bold text-slate-700">{inv.item_sku}</div>
+                                                    <div className="text-xs text-slate-500 mb-2">{inv.item_name}</div>
+                                                    <div className="flex justify-between items-center border-t pt-2">
+                                                        <span className="text-xs text-slate-400">Qty</span>
+                                                        <span className="font-bold text-lg text-blue-600">{inv.quantity}</span>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+
+                                    <div className="mt-6 pt-6 border-t border-slate-200 space-y-3">
+                                        <button 
+                                            onClick={() => handleReportMissing(selectedLocation.location_code)}
+                                            className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded-xl border border-red-200 flex items-center justify-center gap-2 transition-colors"
+                                        >
+                                            <AlertCircle size={18}/> Report Missing Item
+                                        </button>
+                                        <button className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-colors">
+                                            <Printer size={18}/> Print Bin Label
+                                        </button>
+                                    </div>
+                                </GlassCard>
+                            ) : (
+                                <div className="h-full border-2 border-dashed border-slate-300/50 rounded-2xl flex flex-col items-center justify-center text-slate-400 gap-4">
+                                    <MapPin size={48} className="opacity-20"/>
+                                    <p className="text-sm font-medium">Select a location on the map<br/>to view contents.</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {activeTab === 'Overview' && (
-                <div className="space-y-8 max-w-5xl mx-auto">
+                <div className="space-y-8 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    {/* Top KPI Cards */}
                     <div className="grid grid-cols-4 gap-6">
                         {[{l:"Total Items",v:stats?.total_stock,i:Package,c:"blue"},{l:"Bin Locations",v:stats?.total_locations,i:LayoutDashboard,c:"purple"},{l:"Restock Needed",v:stats?.low_stock,i:AlertCircle,c:"red"},{l:"Moves Today",v:stats?.recent_moves,i:Activity,c:"emerald"}].map((k,i)=>(
                             <GlassCard key={i} className="flex items-center gap-4 hover:scale-[1.02] transition-transform cursor-default">
@@ -811,24 +1457,63 @@ export default function App() {
                             </GlassCard>
                         ))}
                     </div>
+
                     <div className="grid grid-cols-3 gap-6">
+                        {/* Recent Activity Feed */}
                         <GlassCard className="col-span-2 min-h-[300px]" noPad>
-                            <div className="p-4 border-b border-black/5 font-bold text-slate-600 text-sm flex justify-between items-center"><span>Recent Activity</span><button onClick={() => navigate('History')} className="text-xs bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded text-slate-600 transition-colors flex items-center gap-1">Full History <ArrowRightCircle size={12}/></button></div>
-                            <div className="divide-y divide-black/5">
-                                {history.slice(0, 5).map(h => (
+                            <div className="p-4 border-b border-black/5 font-bold text-slate-600 text-sm flex justify-between items-center">
+                                <div className="flex items-center gap-2"><History size={16}/> Recent Activity</div>
+                                <button onClick={() => navigate('History')} className="text-xs bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded text-slate-600 transition-colors flex items-center gap-1">Full History <ArrowRightCircle size={12}/></button>
+                            </div>
+                            <div className="divide-y divide-black/5 max-h-[300px] overflow-y-auto macos-scrollbar">
+                                {history.slice(0, 6).map(h => (
                                     <div key={h.id} className="p-3 px-4 flex justify-between items-center text-sm hover:bg-white/40 transition-colors">
-                                        <div className="flex items-center gap-3"><span className={`w-2 h-2 rounded-full ${h.action==='PICK'?'bg-purple-500':'bg-blue-500'}`}/><span className="font-medium text-slate-700">{h.action}</span><span className="text-slate-400">·</span><span className="font-mono text-slate-600">{h.sku_snapshot}</span></div>
-                                        <div className="flex gap-4 text-slate-500 font-mono text-xs"><span>{h.location_snapshot}</span><span className={h.quantity_change < 0 ? 'text-red-500' : 'text-green-600'}>{h.quantity_change > 0 ? '+' : ''}{h.quantity_change}</span></div>
+                                        <div className="flex items-center gap-3">
+                                            <span className={`w-2 h-2 rounded-full ${h.action==='PICK'?'bg-purple-500': h.action==='RECEIVE'?'bg-blue-500':'bg-orange-500'}`}/>
+                                            <span className="font-medium text-slate-700">{h.action}</span>
+                                            <span className="text-slate-400">·</span>
+                                            <span className="font-mono text-slate-600">{h.sku_snapshot}</span>
+                                        </div>
+                                        <div className="flex gap-4 text-slate-500 font-mono text-xs">
+                                            <span>{h.location_snapshot}</span>
+                                            <span className={h.quantity_change < 0 ? 'text-red-500' : 'text-green-600'}>{h.quantity_change > 0 ? '+' : ''}{h.quantity_change}</span>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
                         </GlassCard>
-                         <div className="space-y-4">
-                            <button onClick={()=>navigate('Waves')} className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-4 rounded-2xl shadow-xl shadow-blue-500/30 hover:scale-[1.02] active:scale-95 transition-all text-left group">
-                                <Layers className="mb-2 group-hover:rotate-12 transition-transform"/><div className="font-bold text-lg">Wave Planning</div><div className="text-xs text-blue-100 opacity-80">Optimize picking for allocated orders</div>
-                            </button>
-                             <button onClick={()=>navigate('Inventory')} className="w-full bg-white/50 border border-white/40 p-4 rounded-2xl hover:bg-white/80 transition-all text-left"><Search className="mb-2 text-slate-500"/><div className="font-bold text-slate-700">Lookup Item</div></button>
-                         </div>
+
+                        {/* Velocity Heatmap Widget */}
+                        <div className="space-y-4">
+                             <GlassCard className="h-full flex flex-col" noPad>
+                                <div className="p-4 border-b border-black/5 font-bold text-slate-600 text-sm flex items-center gap-2"><Activity size={16}/> High Velocity Bins</div>
+                                <div className="flex-1 p-4 space-y-3 overflow-y-auto max-h-[240px] macos-scrollbar">
+                                    {stats?.heatmap && stats.heatmap.length > 0 ? (
+                                        stats.heatmap.map((bin, idx) => (
+                                            <div key={bin.location_snapshot} className="flex items-center gap-3">
+                                                <div className="w-6 h-6 rounded bg-slate-100 text-[10px] font-bold flex items-center justify-center text-slate-500">{idx + 1}</div>
+                                                <div className="flex-1">
+                                                    <div className="flex justify-between text-xs mb-1">
+                                                        <span className="font-bold text-slate-700 font-mono">{bin.location_snapshot}</span>
+                                                        <span className="text-slate-400">{bin.activity} moves</span>
+                                                    </div>
+                                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                                        <div className="h-full bg-gradient-to-r from-blue-400 to-purple-500" style={{width: `${Math.min(100, (bin.activity / (stats.heatmap?.[0]?.activity || 1)) * 100)}%`}}></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="text-center text-slate-400 text-xs py-8">No activity data yet.</div>
+                                    )}
+                                </div>
+                             </GlassCard>
+                             
+                             <button onClick={()=>navigate('Inventory')} className="w-full bg-white/50 border border-white/40 p-3 rounded-2xl hover:bg-white/80 transition-all text-left flex items-center justify-between group">
+                                <div><div className="font-bold text-slate-700 text-sm">Lookup Item</div><div className="text-[10px] text-slate-500">Check stock & locations</div></div>
+                                <Search className="text-slate-400 group-hover:text-blue-500 transition-colors" size={18}/>
+                             </button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -881,8 +1566,7 @@ export default function App() {
                             <tbody className="divide-y divide-black/5">
                                 {rmas.map(r => (
                                     <tr key={r.id} className="hover:bg-red-50/20 transition-colors">
-                                        <td className="p-4 font-bold text-slate-700">{r.rma_number}</td><td className="p-4 font-mono text-xs">{r.order_number}</td><td className="p-4">{r.customer}</td><td className="p-4"><StatusBadge status={r.status}/></td>
-                                        <td className="p-4 text-right">{r.status === 'REQUESTED' && <button onClick={()=>handleReceiveRMA(r.id)} className="text-xs bg-slate-800 text-white px-3 py-1 rounded hover:bg-black">Receive</button>}</td>
+                                        <td className="p-4 font-bold text-slate-700">{r.rma_number}</td><td className="p-4 font-mono text-xs">{r.order_number}</td><td className="p-4">{r.customer}</td><td className="p-4"><StatusBadge status={r.status}/></td><td className="p-4 text-right">{r.status === 'REQUESTED' && <button onClick={()=>handleReceiveRMA(r.id)} className="text-xs bg-slate-800 text-white px-3 py-1 rounded hover:bg-black">Receive</button>}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -915,12 +1599,26 @@ export default function App() {
 
             {activeTab === 'Inventory' && (
                 <div className="max-w-6xl mx-auto">
-                    <h2 className="text-2xl font-bold text-slate-800 mb-6">Inventory</h2>
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-slate-800">Inventory</h2>
+                        {/* NEW: Quick Receive Button */}
+                        <button onClick={()=>setShowQuickReceive(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2">
+                            <ArrowDownCircle size={16}/> Quick Receive
+                        </button>
+                    </div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">SKU</th><th className="p-4">Location</th><th className="p-4 text-right">Qty</th></tr></thead>
+                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">SKU</th><th className="p-4">Location</th><th className="p-4">Lot #</th><th className="p-4">Expiry</th><th className="p-4 text-right">Qty</th></tr></thead>
                             <tbody>
-                                {inventory.map(i => <tr key={i.id} className="hover:bg-blue-50/20 border-b border-black/5 last:border-0"><td className="p-4 font-medium">{i.item_sku}</td><td className="p-4 font-mono text-xs">{i.location_code}</td><td className="p-4 text-right font-bold text-slate-600">{i.quantity}</td></tr>)}
+                                {inventory.map(i => (
+                                    <tr key={i.id} className="hover:bg-blue-50/20 border-b border-black/5 last:border-0">
+                                        <td className="p-4 font-medium">{i.item_sku}</td>
+                                        <td className="p-4 font-mono text-xs">{i.location_code}</td>
+                                        <td className="p-4 font-mono text-xs text-slate-500">{i.lot_number || '-'}</td>
+                                        <td className="p-4 font-mono text-xs text-slate-500">{i.expiry_date || '-'}</td>
+                                        <td className="p-4 text-right font-bold text-slate-600">{i.quantity}</td>
+                                    </tr>
+                                ))}
                             </tbody>
                         </table>
                     </GlassCard>
@@ -950,10 +1648,12 @@ export default function App() {
         {/* MacOS Dock */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white/40 backdrop-blur-2xl border border-white/50 rounded-2xl px-4 py-3 shadow-2xl flex items-end gap-2 z-50">
              <DockItem icon={LayoutDashboard} label="Overview" active={activeTab==='Overview'} onClick={()=>navigate('Overview')} />
+             <DockItem icon={MapIcon} label="Layout" active={activeTab==='Layout'} onClick={()=>navigate('Layout')} />
              <DockItem icon={Box} label="Inventory" active={activeTab==='Inventory'} onClick={()=>navigate('Inventory')} />
              <DockItem icon={Layers} label="Waves" active={activeTab==='Waves'} onClick={()=>navigate('Waves')} />
              <DockItem icon={ArrowDownCircle} label="Receiving" active={activeTab==='Receiving'} onClick={()=>navigate('Receiving')} />
              <DockItem icon={ArrowRightLeft} label="Moves" active={activeTab==='Moves'} onClick={()=>navigate('Moves')} />
+             <DockItem icon={ClipboardList} label="Replenish" active={activeTab==='Replenish'} onClick={()=>navigate('Replenish')} />
              <DockItem icon={PackageCheck} label="Packing" active={activeTab==='Packing'} onClick={()=>navigate('Packing')} />
              <DockItem icon={ShoppingCart} label="Orders" active={activeTab==='Orders'} onClick={()=>navigate('Orders')} />
              <DockItem icon={RotateCcw} label="Returns" active={activeTab==='Returns'} onClick={()=>navigate('Returns')} />
