@@ -180,7 +180,7 @@ class InventoryService:
             }
         
     @staticmethod
-    def pick_order_item(order_id, item_sku, location_code, qty=1):
+    def pick_order_item(order_id, item_sku, location_code, qty=1, lot_number=None):
         with transaction.atomic():
             try:
                 order = Order.objects.get(id=order_id)
@@ -195,15 +195,22 @@ class InventoryService:
             if line.qty_picked + qty > line.qty_allocated:
                 return {"error": "Cannot pick more than allocated"}
 
+            # --- UPDATED LOGIC: Filter by Lot Number if provided ---
             try:
-                inv = Inventory.objects.select_for_update().filter(
+                qs = Inventory.objects.select_for_update().filter(
                     item=item, location_code=location_code, quantity__gt=0
-                ).first()
+                )
+                if lot_number:
+                    qs = qs.filter(lot_number=lot_number)
+                
+                # Default to FEFO (First Expiry) if no specific lot targeted, or as fallback
+                inv = qs.order_by('expiry_date', 'version').first()
+
             except Inventory.DoesNotExist:
-                return {"error": "Bin not found"}
+                return {"error": "Bin/Lot not found"}
 
             if not inv or inv.quantity < qty:
-                return {"error": "Not enough physical stock"}
+                return {"error": f"Not enough physical stock in this lot/bin. Available: {inv.quantity if inv else 0}"}
 
             inv.quantity -= qty
             inv.reserved_quantity -= qty 
@@ -221,7 +228,8 @@ class InventoryService:
                 action='PICK',
                 sku_snapshot=item.sku,
                 location_snapshot=location_code,
-                quantity_change=-qty
+                quantity_change=-qty,
+                lot_snapshot=inv.lot_number # Record the specific lot picked
             )
 
             return {"success": True, "status": order.status}

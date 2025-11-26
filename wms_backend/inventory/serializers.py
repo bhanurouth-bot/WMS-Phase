@@ -18,7 +18,12 @@ class InventorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Inventory
-        fields = ['id', 'item_id', 'item_sku', 'item_name', 'item_attr', 'location_code', 'quantity', 'version', 'reserved_quantity', 'available_quantity']
+        # --- ADDED 'lot_number' AND 'expiry_date' HERE ---
+        fields = [
+            'id', 'item_id', 'item_sku', 'item_name', 'item_attr', 
+            'location_code', 'quantity', 'version', 'reserved_quantity', 
+            'available_quantity', 'lot_number', 'expiry_date'
+        ]
 
 class TransactionLogSerializer(serializers.ModelSerializer):
     timestamp = serializers.DateTimeField(format="%Y-%m-%d %H:%M:%S")

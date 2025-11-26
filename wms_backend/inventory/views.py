@@ -117,7 +117,11 @@ class OrderViewSet(viewsets.ModelViewSet):
         sku = request.data.get('sku')
         location = request.data.get('location')
         qty = int(request.data.get('qty', 1))
-        result = InventoryService.pick_order_item(pk, sku, location, qty)
+        lot_number = request.data.get('lot_number') # <--- Add this
+
+        # Pass lot_number to the service
+        result = InventoryService.pick_order_item(pk, sku, location, qty, lot_number)
+        
         if "error" in result:
             return Response(result, status=400)
         return Response(result)

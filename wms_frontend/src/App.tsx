@@ -5,8 +5,9 @@ import {
   Layers, LayoutDashboard, 
   X, ChevronRight, ArrowLeft, Barcode, CheckCircle2, MapPin, ArrowRightCircle,
   ArrowDownCircle, PackageCheck, ArrowRightLeft, ClipboardList, Settings2, Play,
-  Grid, Trash2, Map as MapIcon, Download
+  Grid, Trash2, Map as MapIcon, Download, CalendarClock
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useScanDetection } from './hooks/useScanDetection';
 
 // --- API CONFIG ---
@@ -84,6 +85,86 @@ const StatusBadge = ({ status }: { status: string }) => {
   );
 };
 
+// --- REUSABLE WAREHOUSE MAP COMPONENT ---
+const WarehouseMap = ({ locations, inventory, activeZone, onBinClick, targetLocation, showOnlyTargetZone }: any) => {
+    if (!locations || locations.length === 0) {
+        return (
+            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 rounded-xl bg-white/50">
+                <MapIcon size={48} className="opacity-50 mb-2"/>
+                <p className="font-bold">No Locations Found</p>
+                <p className="text-xs">Add bins in the 'Layout' tab first.</p>
+            </div>
+        );
+    }
+
+    const filteredLocations = locations.filter((l:any) => {
+        if (showOnlyTargetZone && targetLocation) {
+            const target = locations.find((loc:any) => loc.location_code === targetLocation);
+            return target ? l.zone === target.zone : true; 
+        }
+        return activeZone === 'All' || l.zone === activeZone;
+    });
+
+    // --- NEW: DYNAMIC SIZING ---
+    // Calculate the maximum X and Y coordinates to auto-size the grid
+    const maxX = Math.max(...filteredLocations.map((l:any) => l.x || 0), 20); // Min width 20 units
+    const maxY = Math.max(...filteredLocations.map((l:any) => l.y || 0), 15); // Min height 15 units
+    
+    const gridWidth = (maxX + 2) * 40; // +2 for padding
+    const gridHeight = (maxY + 2) * 40;
+
+    return (
+        <div className="relative w-full h-full bg-slate-50/50 overflow-hidden border-slate-200 rounded-xl">
+            <div className="absolute inset-0 p-8 overflow-auto macos-scrollbar flex items-start justify-start">
+                {/* Dynamic Grid Container */}
+                <div 
+                    className="relative bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:40px_40px] border border-slate-200/50 rounded-lg shadow-inner transition-all duration-500"
+                    style={{ width: `${gridWidth}px`, height: `${gridHeight}px` }}
+                >
+                    {filteredLocations.map((loc:any) => {
+                        const itemCount = inventory?.filter((i:any) => i.location_code === loc.location_code).reduce((a:any,b:any) => a + b.quantity, 0) || 0;
+                        const isOccupied = itemCount > 0;
+                        const isTarget = targetLocation === loc.location_code;
+                        
+                        return (
+                            <motion.button
+                                key={loc.id}
+                                onClick={() => onBinClick(loc)}
+                                initial={false}
+                                animate={isTarget ? { 
+                                    scale: [1, 1.3, 1], 
+                                    boxShadow: ["0px 0px 0px 0px rgba(59, 130, 246, 0)", "0px 0px 15px 5px rgba(59, 130, 246, 0.6)", "0px 0px 0px 0px rgba(59, 130, 246, 0)"],
+                                    borderColor: ["#2563eb", "#60a5fa", "#2563eb"],
+                                    zIndex: 50
+                                } : { scale: 1, zIndex: 1 }}
+                                transition={isTarget ? { duration: 1.5, repeat: Infinity } : {}}
+                                style={{ 
+                                    left: `${(loc.x || 0) * 40}px`, 
+                                    top: `${(loc.y || 0) * 40}px` 
+                                }}
+                                className={`absolute w-8 h-8 rounded-md shadow-sm border flex items-center justify-center group transition-colors duration-200
+                                    ${loc.location_type === 'PICK' ? 'rounded-full' : 'rounded-md'}
+                                    ${isTarget ? 'bg-blue-600 border-blue-500 text-white' : 
+                                      isOccupied ? 'bg-white border-blue-400 text-blue-600 font-bold' : 'bg-white border-slate-200 text-slate-300'}
+                                `}
+                            >
+                                {/* Tooltip */}
+                                <span className={`absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-50 ${isTarget ? 'opacity-100' : ''}`}>
+                                    {loc.location_code}
+                                </span>
+                                
+                                {isOccupied && !isTarget && <span className="text-[8px]">{itemCount}</span>}
+                                {isTarget && <MapPin size={14} className="animate-bounce"/>}
+                                {!isOccupied && !isTarget && <Box size={12} strokeWidth={1.5} />}
+                            </motion.button>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // --- MODALS ---
 
 const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
@@ -109,7 +190,6 @@ const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   );
 };
 
-// --- NEW: Quick Receive Modal (Ad-Hoc Receiving) ---
 const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -168,7 +248,7 @@ const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
 const CreateOrderModal = ({ onClose, onSubmit, items }: any) => {
   const [formData, setFormData] = useState({
     customer_name: '', customer_email: '', customer_address: '', 
-    customer_city: '', customer_state: '', customer_zip: '', customer_country: 'USA', // Added defaults
+    customer_city: '', customer_state: '', customer_zip: '', customer_country: 'USA',
     sku: '', qty: 1
   });
 
@@ -192,7 +272,6 @@ const CreateOrderModal = ({ onClose, onSubmit, items }: any) => {
                 <input required value={formData.customer_email} onChange={e=>setFormData({...formData, customer_email: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Email (Optional)" />
                 <input required value={formData.customer_address} onChange={e=>setFormData({...formData, customer_address: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Address" />
                 
-                {/* Updated: City, State, Zip, Country Grid */}
                 <div className="grid grid-cols-2 gap-2">
                     <input required value={formData.customer_city} onChange={e=>setFormData({...formData, customer_city: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="City" />
                     <input required value={formData.customer_state} onChange={e=>setFormData({...formData, customer_state: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="State" />
@@ -225,7 +304,6 @@ const CreateLocationModal = ({ onClose, onSubmit }: any) => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         const form = e.target as HTMLFormElement;
-        // Supports Visual Grid Fields (X, Y)
         const data = {
             location_code: (form.elements.namedItem('code') as HTMLInputElement).value.toUpperCase(),
             location_type: (form.elements.namedItem('type') as HTMLSelectElement).value,
@@ -323,15 +401,20 @@ const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
     )
 }
 
-// --- UNIVERSAL SCANNER (HARDENED + LOTS + VALIDATION) ---
+// --- UNIVERSAL SCANNER (VISUAL + FEFO + LOTS) ---
 
-const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate, onException }: any) => {
+const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack, onUpdate, onException }: any) => {
+    // Expanded State Machine: LOC -> LOT_SELECT -> LOT_VERIFY -> QTY
     const initialStep = mode === 'RECEIVE' ? 'SKU' : mode === 'MOVE' ? 'LOC' : 'LOC';
-    const [step, setStep] = useState<'LOC' | 'SKU' | 'QTY' | 'DEST' | 'LOT' | 'EXPIRY'>(initialStep);
+    const [step, setStep] = useState<'LOC' | 'SKU' | 'QTY' | 'DEST' | 'LOT' | 'EXPIRY' | 'LOT_SELECT' | 'LOT_VERIFY'>(initialStep);
     
     const [manualInput, setManualInput] = useState('');
     const [activeItem, setActiveItem] = useState<any>(null);
     
+    // Lot/FEFO Specific State
+    const [availableLots, setAvailableLots] = useState<InventoryItem[]>([]);
+    const [selectedLot, setSelectedLot] = useState<string>('');
+
     // Move specific state
     const [moveSource, setMoveSource] = useState<string>('');
     const [moveSku, setMoveSku] = useState<string>('');
@@ -349,6 +432,31 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
         gain.gain.exponentialRampToValueAtTime(0.00001, context.currentTime + 0.3);
     };
 
+    // Fetch lots from inventory when location is confirmed
+    const fetchLotsForActiveItem = async () => {
+        if (!activeItem) return;
+        const targetSku = activeItem.sku || activeItem.item_sku;
+        const targetLoc = activeItem.location || activeItem.source_location;
+
+        try {
+            const res = await fetch(`${API_URL}/inventory/?item__sku=${targetSku}&location_code=${targetLoc}`);
+            const invData: InventoryItem[] = await res.json();
+            
+            // Sort by Expiry (FEFO) - null expiry goes last
+            const sorted = invData.sort((a, b) => {
+                if (!a.expiry_date) return 1;
+                if (!b.expiry_date) return -1;
+                return new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime();
+            });
+            
+            setAvailableLots(sorted);
+            setStep('LOT_SELECT');
+        } catch (e) {
+            console.error(e);
+            alert("Error fetching lots");
+        }
+    };
+
     const getPendingList = () => {
         if (mode === 'CYCLE') return data.tasks.filter((t:any) => t.status === 'PENDING');
         if (mode === 'WAVE') return data.pick_list.filter((p:any) => p.status !== 'PICKED');
@@ -364,10 +472,9 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
     const processScan = (scannedData: string) => {
         const val = scannedData.trim().toUpperCase();
         
-        // --- 1. VALIDATE LOCATION SCAN ---
-        // If expecting a location, check against Master Layout
+        // --- 1. VALIDATE LOCATION SCAN (Case Insensitive) ---
         if ((step === 'LOC' || step === 'DEST') && locations) {
-            const isValidLoc = locations.some((l:any) => l.location_code === val);
+            const isValidLoc = locations.some((l:any) => l.location_code.toUpperCase() === val);
             if (!isValidLoc && mode !== 'MOVE') { 
                  playSound('error');
                  alert(`INVALID LOCATION: ${val}. Scan a bin from the Layout.`);
@@ -390,18 +497,23 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
         // --- AUTO-SELECT TASK ---
         if (!activeItem) {
             const pending = getPendingList();
-            // Try matching SKU (Product Scan)
-            const matchSku = pending.find((t:any) => (t.sku === val) || (t.item_sku === val));
+            // Try matching SKU (Case Insensitive)
+            const matchSku = pending.find((t:any) => {
+                const tSku = (t.sku || t.item_sku || '').toUpperCase();
+                return tSku === val;
+            });
             if (matchSku) {
                 setActiveItem(matchSku);
-                // If Receiving, user verified item, now put it away.
                 if (mode === 'RECEIVE') setStep('LOC'); 
                 else setStep('LOC'); 
                 playSound('success');
                 return;
             }
-            // Try matching Location (Bin Scan)
-            const matchLoc = pending.find((t:any) => (t.location === val) || (t.source_location === val));
+            // Try matching Location (Case Insensitive)
+            const matchLoc = pending.find((t:any) => {
+                const tLoc = (t.location || t.source_location || '').toUpperCase();
+                return tLoc === val;
+            });
             if (matchLoc) {
                 setActiveItem(matchLoc);
                 setStep('SKU');
@@ -409,45 +521,65 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
                 return;
             }
             playSound('error');
-            alert("Item not found in this list. Scan a Product SKU or valid Location to begin.");
+            alert("Item not found in this list.");
             return;
         }
 
-        const targetLoc = mode === 'REPLENISH' ? activeItem.source_location : activeItem.location;
-        const targetSku = mode === 'CYCLE' || mode === 'REPLENISH' ? activeItem.item_sku : activeItem.sku;
+        // Resolve Targets (Case Insensitive)
+        const rawLoc = mode === 'REPLENISH' ? activeItem.source_location : activeItem.location;
+        const targetLoc = (rawLoc || '').toUpperCase();
+        
+        const rawSku = mode === 'CYCLE' || mode === 'REPLENISH' ? activeItem.item_sku : activeItem.sku;
+        const targetSku = (rawSku || '').toUpperCase();
 
+        const rawDest = activeItem.dest_location || '';
+        const targetDest = rawDest.toUpperCase();
+
+        // --- STEP LOGIC ---
         if (step === 'LOC') {
             if (val === targetLoc || (mode === 'RECEIVE')) {
                 if(mode === 'RECEIVE') {
                     activeItem._tempLoc = val;
                     setStep('QTY'); 
                 } else {
-                    setStep('SKU');
+                    // If Picking/Replenishing, check for Lots
+                    fetchLotsForActiveItem();
                 }
                 playSound('success');
             } else {
                 playSound('error');
-                alert(`WRONG BIN! Expected: ${targetLoc}`);
+                alert(`WRONG BIN! Scanned: ${val}, Expected: ${targetLoc}`);
             }
-        } else if (step === 'SKU') {
-            if (val === targetSku) {
-                if (mode === 'RECEIVE') setStep('LOC'); 
-                else setStep(mode === 'REPLENISH' ? 'DEST' : 'QTY');
+        } 
+        else if (step === 'LOT_VERIFY') {
+            const targetLot = (selectedLot || '').toUpperCase();
+            if (val === targetLot) {
+                setStep(mode === 'REPLENISH' ? 'DEST' : 'QTY');
                 playSound('success');
             } else {
                 playSound('error');
-                alert(`WRONG ITEM! Expected: ${targetSku}`);
+                alert(`WRONG LOT! Scanned: ${val}, Expected: ${targetLot}`);
             }
-        } else if (step === 'DEST') {
-             if (val === activeItem.dest_location) {
+        }
+        else if (step === 'SKU') {
+            if (val === targetSku) {
+                if (mode === 'RECEIVE') setStep('LOC'); 
+            } else {
+                 playSound('error');
+                 alert(`WRONG SKU! Expected: ${targetSku}`);
+            }
+        } 
+        else if (step === 'DEST') {
+             if (val === targetDest) {
                  onUpdate(activeItem); 
                  resetCycle();
                  playSound('success');
              } else {
                  playSound('error');
-                 alert(`WRONG DEST! Expected: ${activeItem.dest_location}`);
+                 alert(`WRONG DEST! Expected: ${targetDest}`);
              }
-        } else if (step === 'LOT') {
+        } 
+        else if (step === 'LOT') {
             activeItem._lot = val;
             setStep('EXPIRY');
             playSound('success');
@@ -465,15 +597,8 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
         if (step === 'QTY') {
             const qty = parseInt(manualInput);
             activeItem._qty = qty;
-            if (mode === 'RECEIVE') setStep('LOT'); 
-            else { onUpdate(activeItem, qty); resetCycle(); }
-            playSound('success');
-        } else if (step === 'LOT') {
-            activeItem._lot = manualInput;
-            setStep('EXPIRY');
-            playSound('success');
-        } else if (step === 'EXPIRY') {
-            onUpdate(activeItem, activeItem._qty, activeItem._tempLoc, activeItem._lot, manualInput);
+            // Pass the selected LOT to the update function
+            onUpdate(activeItem, qty, null, selectedLot); 
             resetCycle();
             playSound('success');
         } else {
@@ -484,6 +609,8 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
 
     const resetCycle = () => {
         setActiveItem(null);
+        setSelectedLot('');
+        setAvailableLots([]);
         setStep(mode === 'RECEIVE' ? 'SKU' : 'LOC');
         setManualInput('');
     };
@@ -493,6 +620,17 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
         if(confirm(`Report SHORT PICK for ${activeItem.sku}?`)) {
             if (onException) onException(activeItem, 'SHORT_PICK');
             resetCycle();
+        }
+    };
+
+    // Map Click Handler (Simulates Scan)
+    const handleMapClick = (loc: any) => {
+        if (activeItem && step === 'LOC') {
+            const target = mode === 'REPLENISH' ? activeItem.source_location : activeItem.location;
+            // Case insensitive match for map click too
+            if (loc.location_code.toUpperCase() === target?.toUpperCase()) {
+                processScan(loc.location_code);
+            }
         }
     };
 
@@ -537,39 +675,76 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
                     ))}
                 </div>
             ) : (
-                <div className="relative z-10 flex-1 flex flex-col p-6 animate-in slide-in-from-right duration-300">
-                    <div className="flex-1 flex flex-col justify-center items-center text-center space-y-6">
-                        <div className="bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-3xl w-full max-w-sm shadow-2xl relative overflow-hidden">
-                            <div className={`absolute inset-0 opacity-20 ${step === 'LOC' ? 'bg-yellow-500' : step === 'SKU' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
-                            <div className="relative z-10">
-                                <div className="text-xs font-bold uppercase tracking-widest opacity-70 mb-2">
-                                    {step === 'LOC' ? (mode === 'RECEIVE' ? 'Scan Putaway Bin' : 'Scan Location') 
-                                    : step === 'SKU' ? 'Scan Product' 
-                                    : step === 'LOT' ? 'Scan Lot Number' 
-                                    : step === 'EXPIRY' ? 'Scan/Enter Expiry' 
-                                    : 'Enter Quantity'}
+                <div className="relative z-10 flex-1 flex flex-col animate-in slide-in-from-right duration-300 h-full">
+                    
+                    {/* --- SPLIT VIEW: MAP vs INFO --- */}
+                    <div className="flex-1 relative overflow-hidden">
+                        {step === 'LOC' && mode !== 'RECEIVE' ? (
+                            // MAP VIEW FOR PICKING
+                            <div className="absolute inset-0 flex flex-col">
+                                <div className="bg-yellow-500/20 p-2 text-center text-yellow-300 font-bold text-sm animate-pulse">
+                                    GO TO BIN: {activeItem.location || activeItem.source_location}
                                 </div>
-                                <div className="text-6xl font-mono font-bold tracking-tighter mb-4">
-                                    {step === 'LOC' ? (mode==='RECEIVE' ? 'SCAN BIN' : mode==='REPLENISH'?activeItem.source_location:activeItem.location)
-                                    : step === 'SKU' ? (mode==='CYCLE'||mode==='REPLENISH'?activeItem.item_sku:activeItem.sku)
-                                    : step === 'DEST' ? activeItem.dest_location
-                                    : step === 'LOT' ? 'LOT #'
-                                    : step === 'EXPIRY' ? 'YYYY-MM-DD'
-                                    : (mode === 'WAVE' ? activeItem.total_qty : '?')}
-                                </div>
-                                <div className="text-sm bg-black/30 rounded-full px-3 py-1 inline-block">
-                                    {activeItem.item_name || "Item Verification"}
+                                <WarehouseMap 
+                                    locations={locations} 
+                                    inventory={inventory} 
+                                    activeZone="All" 
+                                    targetLocation={activeItem.location || activeItem.source_location}
+                                    showOnlyTargetZone={true}
+                                    onBinClick={handleMapClick}
+                                />
+                                <div className="absolute bottom-4 left-0 right-0 text-center text-xs text-slate-400 bg-black/50 p-1">
+                                    Click highlighted bin to confirm arrival
                                 </div>
                             </div>
-                        </div>
-                        {mode === 'WAVE' && step === 'LOC' && (
-                            <button onClick={handleShortPick} className="text-red-400 text-sm font-bold border border-red-500/30 px-4 py-2 rounded-full hover:bg-red-500/20">
-                                Cannot find item? (Short Pick)
-                            </button>
+                        ) : step === 'LOT_SELECT' ? (
+                            // FEFO LOT SELECTION
+                            <div className="p-6 h-full overflow-y-auto">
+                                <h3 className="text-center text-xl font-bold mb-4">Select Lot (FEFO)</h3>
+                                {availableLots.length === 0 && <div className="text-center text-slate-400">No lots found in this bin.</div>}
+                                <div className="space-y-3">
+                                    {availableLots.map((lot, idx) => (
+                                        <button 
+                                            key={lot.id}
+                                            onClick={() => { setSelectedLot(lot.lot_number || 'N/A'); setStep('LOT_VERIFY'); }}
+                                            className={`w-full p-4 rounded-xl border-2 flex justify-between items-center ${idx === 0 ? 'border-green-500 bg-green-500/10' : 'border-white/10 bg-white/5'}`}
+                                        >
+                                            <div>
+                                                <div className="font-mono font-bold text-lg">{lot.lot_number || 'NO LOT'}</div>
+                                                <div className="text-xs text-slate-400 flex items-center gap-2">
+                                                    <CalendarClock size={12}/> Exp: {lot.expiry_date || 'N/A'}
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="text-xl font-bold">{lot.quantity}</div>
+                                                {idx === 0 && <div className="text-[10px] bg-green-500 text-black px-2 rounded font-bold">FEFO</div>}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : (
+                            // STANDARD ACTION VIEW
+                            <div className="flex flex-col justify-center items-center text-center space-y-6 h-full p-6">
+                                <div className="bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-3xl w-full max-w-sm shadow-2xl relative overflow-hidden">
+                                    <div className={`absolute inset-0 opacity-20 ${step === 'SKU' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
+                                    <div className="relative z-10">
+                                        <div className="text-xs font-bold uppercase tracking-widest opacity-70 mb-2">
+                                            {step === 'LOT_VERIFY' ? 'Verify Lot' : 'Enter Quantity'}
+                                        </div>
+                                        <div className="text-4xl font-mono font-bold tracking-tighter mb-4 truncate">
+                                            {step === 'LOT_VERIFY' ? selectedLot : (mode === 'WAVE' ? activeItem.total_qty : '?')}
+                                        </div>
+                                        <div className="text-sm bg-black/30 rounded-full px-3 py-1 inline-block">
+                                            {activeItem.item_name || "Verification"}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         )}
                     </div>
 
-                    <form onSubmit={handleSubmitManual} className="mt-auto pt-6">
+                    <form onSubmit={handleSubmitManual} className="p-4 bg-black/20 backdrop-blur-lg border-t border-white/10">
                         <div className="relative">
                             <Scan className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"/>
                             <input 
@@ -578,15 +753,20 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
                                 onChange={e => setManualInput(e.target.value)}
                                 type={step === 'QTY' ? 'number' : 'text'}
                                 className="w-full bg-black/50 border border-white/20 rounded-2xl py-4 pl-12 pr-4 text-xl font-mono text-white placeholder-slate-600 outline-none focus:border-blue-500"
-                                placeholder={step === 'QTY' ? "Enter Qty..." : step === 'EXPIRY' ? "YYYY-MM-DD" : "Manual Entry..."}
+                                placeholder={step === 'QTY' ? "Enter Qty..." : step === 'LOC' ? "Scan Bin..." : step === 'LOT_VERIFY' ? "Scan Lot..." : "Scan..."}
                             />
                         </div>
                         <div className="grid grid-cols-2 gap-4 mt-4">
                             <button type="button" onClick={resetCycle} className="py-4 rounded-xl font-bold text-slate-400 bg-white/5 hover:bg-white/10">Cancel</button>
                             <button type="submit" className="py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg">
-                                {step === 'QTY' ? 'Confirm Qty' : 'Enter'}
+                                {step === 'QTY' ? 'Confirm' : 'Enter'}
                             </button>
                         </div>
+                        {mode === 'WAVE' && step === 'LOC' && (
+                            <button type="button" onClick={handleShortPick} className="mt-3 w-full text-red-400 text-xs font-bold py-2 hover:text-red-300">
+                                Cannot find item? (Short Pick)
+                            </button>
+                        )}
                     </form>
                 </div>
             )}
@@ -597,39 +777,137 @@ const UniversalScanner = ({ mode, data, locations, onComplete, onBack, onUpdate,
 // --- PACKING STATION ---
 
 const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order, onBack:()=>void, onComplete:()=>void, onPrint:(zpl: string)=>void }) => {
+    // Tracks packed qty by SKU (Normalized to Uppercase)
     const [packedItems, setPackedItems] = useState<Record<string, number>>({});
     const [boxSize, setBoxSize] = useState<string>('');
     const [input, setInput] = useState('');
     const [isSealed, setIsSealed] = useState(false);
 
+    // --- Scan State ---
+    const [scanStep, setScanStep] = useState<'SKU' | 'LOT'>('SKU');
+    const [activeSku, setActiveSku] = useState<string>('');
+
+    // Calculate totals
     const totalItems = order.lines.reduce((acc, l) => acc + l.qty_picked, 0);
     const currentPacked = Object.values(packedItems).reduce((a,b)=>a+b, 0);
     
+    const playSound = (type: 'success' | 'error' | 'beep') => {
+        const context = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const osc = context.createOscillator();
+        const gain = context.createGain();
+        osc.connect(gain);
+        gain.connect(context.destination);
+        
+        if (type === 'error') {
+            osc.frequency.value = 300;
+            osc.type = 'sawtooth';
+        } else if (type === 'success') {
+            osc.frequency.value = 1000;
+            osc.type = 'sine';
+        } else {
+            osc.frequency.value = 600; 
+            osc.type = 'square';
+        }
+        
+        osc.start();
+        gain.gain.exponentialRampToValueAtTime(0.00001, context.currentTime + 0.2);
+    };
+
     const handleScan = (e: React.FormEvent) => {
         e.preventDefault();
-        const sku = input.toUpperCase();
-        const line = order.lines.find(l => l.item_sku === sku);
-        
-        if (line) {
-            const currentCount = packedItems[sku] || 0;
-            if (currentCount < line.qty_picked) {
-                setPackedItems(prev => ({...prev, [sku]: currentCount + 1}));
+        const val = input.trim().toUpperCase(); // Normalize input
+
+        if (!val) return;
+
+        if (scanStep === 'SKU') {
+            // --- STEP 1: Verify SKU ---
+            // Normalize line item SKU for comparison
+            const line = order.lines.find(l => (l.item_sku || '').trim().toUpperCase() === val);
+            
+            if (line) {
+                // Use the normalized key for counting
+                const key = line.item_sku.toUpperCase();
+                const currentCount = packedItems[key] || 0;
+                
+                if (currentCount < line.qty_picked) {
+                    setActiveSku(key); // Store normalized SKU
+                    setScanStep('LOT'); // Move to Lot Scan
+                    playSound('beep');
+                    setInput('');
+                } else { 
+                    playSound('error');
+                    alert(`Item '${val}' is already fully packed! (${currentCount}/${line.qty_picked})`); 
+                    setInput(''); 
+                }
+            } else { 
+                playSound('error');
+                alert(`Wrong Item! Scanned '${val}' is NOT in this order.`); 
+                setInput(''); 
+            }
+        } else {
+            // --- STEP 2: Verify Lot ---
+            if (val === activeSku) {
+                playSound('error');
+                alert("You scanned the SKU again. Please scan the Lot Number found on the item label.");
                 setInput('');
-            } else { alert("Item already fully packed!"); setInput(''); }
-        } else { alert("Wrong Item! Not in this order."); setInput(''); }
+                return;
+            }
+
+            // Commit the pack (we don't validate the lot against backend yet, just record it)
+            setPackedItems(prev => ({...prev, [activeSku]: (prev[activeSku] || 0) + 1}));
+            
+            // Reset cycle
+            setScanStep('SKU');
+            setActiveSku('');
+            playSound('success');
+            setInput('');
+        }
     };
 
     const handleSeal = async () => {
         if (!boxSize) return alert("Select a box size first!");
+        
+        if (currentPacked !== totalItems) {
+            return alert(`You have only packed ${currentPacked} of ${totalItems} items.`);
+        }
+
         setIsSealed(true);
-        const resPack = await fetch(`${API_URL}/orders/${order.id}/pack/`, { method: 'POST' });
-        if(!resPack.ok) return alert("Error packing");
-        const resShip = await fetch(`${API_URL}/orders/${order.id}/ship/`, { method: 'POST' });
-        if(!resShip.ok) return alert("Error shipping");
-        const resLabel = await fetch(`${API_URL}/orders/${order.id}/shipping_label/`);
-        const zpl = await resLabel.text();
-        onPrint(zpl);
-        onComplete();
+        try {
+            // 1. Pack Order
+            const resPack = await fetch(`${API_URL}/orders/${order.id}/pack/`, { 
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+            
+            if(!resPack.ok) {
+                const err = await resPack.json();
+                setIsSealed(false);
+                return alert("Error packing order: " + (err.error || "Unknown Error"));
+            }
+
+            // 2. Ship Order
+            const resShip = await fetch(`${API_URL}/orders/${order.id}/ship/`, { 
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+            
+            if(!resShip.ok) {
+                const err = await resShip.json();
+                setIsSealed(false);
+                return alert("Error shipping order: " + (err.error || "Unknown Error"));
+            }
+
+            // 3. Get Label
+            const resLabel = await fetch(`${API_URL}/orders/${order.id}/shipping_label/`);
+            const zpl = await resLabel.text();
+            onPrint(zpl);
+            onComplete();
+
+        } catch (e) {
+            console.error(e);
+            setIsSealed(false);
+            alert("Network error. Check backend console.");
+        }
     };
 
     return (
@@ -637,30 +915,89 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
             <div className="flex justify-between items-center mb-6">
                 <div className="flex items-center gap-4">
                     <button onClick={onBack} className="bg-white/50 p-2 rounded-xl hover:bg-white transition-colors"><ArrowLeft/></button>
-                    <div><div className="text-2xl font-bold text-slate-800 flex items-center gap-3">Packing Station <span className="text-sm font-mono bg-slate-200 px-2 py-1 rounded text-slate-600">{order.order_number}</span></div><div className="text-xs text-slate-500">{order.customer_name} · {order.customer_city}</div></div>
+                    <div>
+                        <div className="text-2xl font-bold text-slate-800 flex items-center gap-3">
+                            Packing Station <span className="text-sm font-mono bg-slate-200 px-2 py-1 rounded text-slate-600">{order.order_number}</span>
+                        </div>
+                        <div className="text-xs text-slate-500">{order.customer_name} · {order.customer_city}</div>
+                    </div>
                 </div>
-                <div className="text-right"><div className="text-3xl font-bold text-blue-600">{currentPacked} <span className="text-lg text-slate-400">/ {totalItems}</span></div><div className="text-xs font-bold uppercase text-slate-400">Items Scanned</div></div>
+                <div className="text-right">
+                    <div className="text-3xl font-bold text-blue-600">{currentPacked} <span className="text-lg text-slate-400">/ {totalItems}</span></div>
+                    <div className="text-xs font-bold uppercase text-slate-400">Items Scanned</div>
+                </div>
             </div>
+
             <div className="flex-1 flex gap-6 overflow-hidden">
+                {/* LEFT: Item List */}
                 <div className="w-1/3 flex flex-col gap-4 overflow-y-auto pr-2">
                     {order.lines.map(line => {
-                        const packed = packedItems[line.item_sku] || 0;
-                        const isComplete = packed === line.qty_picked;
+                        // Normalize key for lookup
+                        const key = (line.item_sku || '').toUpperCase();
+                        const packed = packedItems[key] || 0;
+                        const isComplete = packed >= line.qty_picked;
+                        
                         return (
                             <div key={line.id} className={`p-4 rounded-xl border-2 transition-all ${isComplete ? 'bg-green-50 border-green-200 opacity-60' : 'bg-white border-white shadow-sm'}`}>
-                                <div className="flex justify-between items-start"><div><div className="font-bold text-slate-700">{line.item_sku}</div><div className="text-xs text-slate-500">Qty: {line.qty_picked}</div></div>{isComplete ? <CheckCircle2 className="text-green-500"/> : <div className="text-xl font-bold text-slate-300">{packed}/{line.qty_picked}</div>}</div>
-                                <div className="mt-2 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden"><div className={`h-full transition-all duration-300 ${isComplete?'bg-green-500':'bg-blue-500'}`} style={{width: `${(packed/line.qty_picked)*100}%`}}></div></div>
+                                <div className="flex justify-between items-start">
+                                    <div>
+                                        <div className="font-bold text-slate-700">{line.item_sku}</div>
+                                        <div className="text-xs text-slate-500">Qty Picked: {line.qty_picked}</div>
+                                    </div>
+                                    {isComplete ? <CheckCircle2 className="text-green-500"/> : <div className="text-xl font-bold text-slate-300">{packed}/{line.qty_picked}</div>}
+                                </div>
+                                <div className="mt-2 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                    <div className={`h-full transition-all duration-300 ${isComplete?'bg-green-500':'bg-blue-500'}`} style={{width: `${(packed/line.qty_picked)*100}%`}}></div>
+                                </div>
                             </div>
                         )
                     })}
                 </div>
-                <div className="flex-1 bg-slate-100/50 rounded-3xl border border-slate-200 flex flex-col items-center justify-center relative p-8">
-                    <div className={`w-64 h-64 border-4 border-dashed rounded-2xl flex items-center justify-center mb-8 transition-all ${currentPacked===totalItems ? 'border-green-400 bg-green-50' : 'border-slate-300'}`}><PackageCheck size={64} className={currentPacked===totalItems ? 'text-green-500' : 'text-slate-300'}/></div>
-                    <form onSubmit={handleScan} className="w-full max-w-md relative z-10"><input autoFocus value={input} onChange={e=>setInput(e.target.value)} placeholder="Scan Item..." className="w-full p-4 pl-12 rounded-xl shadow-lg border-2 border-transparent focus:border-blue-500 outline-none text-lg font-mono"/><Barcode className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"/></form>
-                    <div className="mt-8 grid grid-cols-3 gap-4 w-full max-w-lg">{['Small Box', 'Medium Box', 'Large Box'].map(size => (<button key={size} onClick={()=>setBoxSize(size)} className={`p-3 rounded-xl border-2 font-bold text-sm transition-all ${boxSize===size ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-white bg-white text-slate-500 hover:border-blue-200'}`}>{size}</button>))}</div>
+
+                {/* CENTER: Scanner */}
+                <div className={`flex-1 rounded-3xl border-2 flex flex-col items-center justify-center relative p-8 transition-colors duration-500
+                    ${scanStep === 'LOT' ? 'bg-purple-50 border-purple-200' : 'bg-slate-100/50 border-slate-200'}`}>
+                    
+                    <div className={`w-64 h-64 border-4 border-dashed rounded-2xl flex items-center justify-center mb-8 transition-all 
+                        ${currentPacked===totalItems ? 'border-green-400 bg-green-50' : scanStep==='LOT' ? 'border-purple-300 bg-purple-100' : 'border-slate-300'}`}>
+                        <PackageCheck size={64} className={currentPacked===totalItems ? 'text-green-500' : scanStep==='LOT' ? 'text-purple-500' : 'text-slate-300'}/>
+                    </div>
+                    
+                    <form onSubmit={handleScan} className="w-full max-w-md relative z-10">
+                        <div className={`text-center mb-4 font-bold uppercase tracking-widest transition-colors ${scanStep === 'LOT' ? 'text-purple-600 scale-110' : 'text-slate-400'}`}>
+                            {scanStep === 'SKU' ? 'Step 1: Scan Item SKU' : `Step 2: Scan Lot for ${activeSku}`}
+                        </div>
+                        
+                        <div className="relative">
+                            <input 
+                                autoFocus 
+                                value={input} 
+                                onChange={e=>setInput(e.target.value)} 
+                                placeholder={scanStep === 'SKU' ? "Scan SKU..." : "Scan Lot Number..."}
+                                className={`w-full p-4 pl-12 rounded-xl shadow-lg border-2 outline-none text-lg font-mono transition-all
+                                    ${scanStep === 'LOT' ? 'border-purple-500 focus:ring-4 ring-purple-500/20' : 'border-transparent focus:border-blue-500'}`}
+                            />
+                            <Barcode className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${scanStep === 'LOT' ? 'text-purple-500' : 'text-slate-400'}`}/>
+                        </div>
+                    </form>
+
+                    <div className="mt-8 grid grid-cols-3 gap-4 w-full max-w-lg">
+                        {['Small Box', 'Medium Box', 'Large Box'].map(size => (
+                            <button key={size} onClick={()=>setBoxSize(size)} className={`p-3 rounded-xl border-2 font-bold text-sm transition-all ${boxSize===size ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-white bg-white text-slate-500 hover:border-blue-200'}`}>{size}</button>
+                        ))}
+                    </div>
                 </div>
             </div>
-            <div className="mt-6 flex justify-end"><button disabled={currentPacked !== totalItems || !boxSize || isSealed} onClick={handleSeal} className="bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-4 rounded-2xl font-bold text-lg shadow-xl shadow-blue-500/30 hover:scale-[1.02] transition-all flex items-center gap-3">{isSealed ? 'Sealing...' : <><Printer/> Seal & Print Label</>}</button></div>
+
+            <div className="mt-6 flex justify-end">
+                <button 
+                    disabled={currentPacked !== totalItems || !boxSize || isSealed} 
+                    onClick={handleSeal} 
+                    className="bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-8 py-4 rounded-2xl font-bold text-lg shadow-xl shadow-blue-500/30 hover:scale-[1.02] transition-all flex items-center gap-3"
+                >
+                    {isSealed ? 'Sealing...' : <><Printer/> Seal & Print Label</>}
+                </button>
+            </div>
         </div>
     );
 }
@@ -704,33 +1041,42 @@ export default function App() {
   const [showLabel, setShowLabel] = useState(false);
   const [currentZpl, setCurrentZpl] = useState('');
 
+  // Safe Data Fetching
   const fetchAll = async () => {
     try {
-      const [inv, ord, rm, hist, stat, cnt, po, itm, rep, cfg, locs] = await Promise.all([
-        fetch(`${API_URL}/inventory/`).then(r=>r.json()),
-        fetch(`${API_URL}/orders/`).then(r=>r.json()),
-        fetch(`${API_URL}/rmas/`).then(r=>r.json()),
-        fetch(`${API_URL}/history/`).then(r=>r.json()),
-        fetch(`${API_URL}/dashboard/stats/`).then(r=>r.json()),
-        fetch(`${API_URL}/cycle-counts/`).then(r=>r.json()),
-        fetch(`${API_URL}/purchase-orders/`).then(r=>r.json()),
-        fetch(`${API_URL}/items/`).then(r=>r.json()),
-        fetch(`${API_URL}/replenishment-tasks/`).then(r=>r.json()),
-        fetch(`${API_URL}/replenishment-rules/`).then(r=>r.json()),
-        fetch(`${API_URL}/locations/`).then(r=>r.json()),
-      ]);
-      setInventory(inv);
-      setOrders(ord);
-      setRmas(rm);
-      setHistory(hist);
-      setStats(stat);
-      setCounts(cnt);
-      setPos(po);
-      setItems(itm);
-      setReplenishTasks(rep);
-      setBinConfigs(cfg);
-      setLocations(locs);
-    } catch(e) { console.error(e); }
+        const responses = await Promise.allSettled([
+            fetch(`${API_URL}/inventory/`).then(r=>r.json()),
+            fetch(`${API_URL}/orders/`).then(r=>r.json()),
+            fetch(`${API_URL}/rmas/`).then(r=>r.json()),
+            fetch(`${API_URL}/history/`).then(r=>r.json()),
+            fetch(`${API_URL}/dashboard/stats/`).then(r=>r.json()),
+            fetch(`${API_URL}/cycle-counts/`).then(r=>r.json()),
+            fetch(`${API_URL}/purchase-orders/`).then(r=>r.json()),
+            fetch(`${API_URL}/items/`).then(r=>r.json()),
+            fetch(`${API_URL}/replenishment-tasks/`).then(r=>r.json()),
+            fetch(`${API_URL}/replenishment-rules/`).then(r=>r.json()),
+            fetch(`${API_URL}/locations/`).then(r=>r.json()),
+        ]);
+
+        // Destructure results safely (defaults to empty array if failed)
+        const getData = (idx: number, fallback: any = []) => 
+            responses[idx].status === 'fulfilled' ? (responses[idx] as any).value : fallback;
+
+        setInventory(getData(0));
+        setOrders(getData(1));
+        setRmas(getData(2));
+        setHistory(getData(3));
+        setStats(getData(4, null));
+        setCounts(getData(5));
+        setPos(getData(6));
+        setItems(getData(7));
+        setReplenishTasks(getData(8));
+        setBinConfigs(getData(9));
+        setLocations(getData(10));
+
+    } catch(e) { 
+        console.error("Critical Data Fetch Error:", e); 
+    }
   };
 
   useEffect(() => { fetchAll(); }, []);
@@ -806,7 +1152,7 @@ export default function App() {
       } else { alert(data.error); }
   };
 
-  const handleWavePickSubmit = async (item: any, qty: number) => {
+  const handleWavePickSubmit = async (item: any, qty: number, _: any, lot?: string) => {
       let remainingQty = qty;
       for (const orderId of item.order_ids) {
           const order = orders.find(o => o.id === orderId);
@@ -817,8 +1163,16 @@ export default function App() {
           if (needed <= 0) continue;
           const toPick = Math.min(remainingQty, needed);
           if (toPick > 0) {
+              // Pass the lot number to the backend
               await fetch(`${API_URL}/orders/${orderId}/pick_item/`, {
-                  method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ sku: item.sku, location: item.location, qty: toPick })
+                  method: 'POST', 
+                  headers: {'Content-Type': 'application/json'}, 
+                  body: JSON.stringify({ 
+                      sku: item.sku, 
+                      location: item.location, 
+                      qty: toPick,
+                      lot_number: lot 
+                  })
               });
               remainingQty -= toPick;
           }
@@ -923,16 +1277,26 @@ export default function App() {
   };
 
   const handleCreateLocation = async (data: any) => {
-      const res = await fetch(`${API_URL}/locations/`, { 
-          method: 'POST', 
-          headers: {'Content-Type': 'application/json'}, 
-          body: JSON.stringify(data) 
-      });
-      if (res.ok) {
-          setShowLocationModal(false);
-          fetchAll();
-      } else {
-          alert("Error creating location");
+      try {
+          const res = await fetch(`${API_URL}/locations/`, { 
+              method: 'POST', 
+              headers: {'Content-Type': 'application/json'}, 
+              body: JSON.stringify(data) 
+          });
+          
+          if (res.ok) {
+              setShowLocationModal(false);
+              fetchAll();
+          } else {
+              // Robust error handling
+              const errorData = await res.json();
+              const errorMessage = Object.entries(errorData)
+                  .map(([key, val]) => `${key}: ${val}`)
+                  .join('\n');
+              alert(`Failed to create location:\n${errorMessage}`);
+          }
+      } catch (e) {
+          alert("Network error: Is the backend running?");
       }
   };
 
@@ -969,22 +1333,20 @@ export default function App() {
           const data = await res.json();
 
           if (!res.ok) {
-              // Handle Backend Errors (e.g. 400, 500)
               alert(`Error: ${data.error || 'Action failed'}`);
           } else {
-              // Handle Logical "Failures" (e.g. Not enough stock)
               if (action === 'allocate') {
                   if (data.status === 'PENDING') {
-                      alert("⚠️ Allocation Incomplete: Not enough stock to fulfill this order. Status remains PENDING.");
+                      alert("Allocation Incomplete: Not enough stock.");
                   } else if (data.status === 'ALLOCATED') {
-                      alert("✅ Order Successfully Allocated!");
+                      alert("Order Allocated!");
                   }
               }
-              fetchAll(); // Refresh UI
+              fetchAll(); 
           }
       } catch (e) {
-          console.error("Network Error:", e);
-          alert("Connection Error: Is the backend running?");
+          console.error(e);
+          alert("Connection Error");
       }
   };
 
@@ -1020,6 +1382,7 @@ export default function App() {
                         mode="WAVE" 
                         data={activeWave} 
                         locations={locations}
+                        inventory={inventory}
                         onUpdate={handleWavePickSubmit} 
                         onException={handleScannerException}
                         onBack={() => setScannerMode('IDLE')}
@@ -1027,19 +1390,19 @@ export default function App() {
                       />
                   )}
                   {scannerMode === 'CYCLE' && activeCount && (
-                      <UniversalScanner mode="CYCLE" data={activeCount} locations={locations} onUpdate={(item:any, qty:number) => handleCycleCountSubmit(item.id, qty)} onBack={() => setScannerMode('IDLE')}
+                      <UniversalScanner mode="CYCLE" data={activeCount} locations={locations} inventory={inventory} onUpdate={(item:any, qty:number) => handleCycleCountSubmit(item.id, qty)} onBack={() => setScannerMode('IDLE')}
                         onComplete={() => { alert("Count Complete!"); setScannerMode('IDLE'); setActiveCount(null); fetchAll(); }} />
                   )}
                   {scannerMode === 'RECEIVE' && activePO && (
-                      <UniversalScanner mode="RECEIVE" data={activePO} locations={locations} onUpdate={(item:any, qty:number, loc: string, lot: string, exp: string) => handleReceiveSubmit(item, qty, loc, lot, exp)} onBack={() => setScannerMode('IDLE')}
+                      <UniversalScanner mode="RECEIVE" data={activePO} locations={locations} inventory={inventory} onUpdate={(item:any, qty:number, loc: string, lot: string, exp: string) => handleReceiveSubmit(item, qty, loc, lot, exp)} onBack={() => setScannerMode('IDLE')}
                         onComplete={() => { alert("Receiving Complete!"); setScannerMode('IDLE'); setActivePO(null); fetchAll(); }} />
                   )}
                   {scannerMode === 'MOVE' && (
-                      <UniversalScanner mode="MOVE" data={{reference:'Ad-Hoc Move'}} locations={locations} onUpdate={handleMoveSubmit} onBack={() => setScannerMode('IDLE')}
+                      <UniversalScanner mode="MOVE" data={{reference:'Ad-Hoc Move'}} locations={locations} inventory={inventory} onUpdate={handleMoveSubmit} onBack={() => setScannerMode('IDLE')}
                         onComplete={() => { setScannerMode('IDLE'); fetchAll(); }} />
                   )}
                   {scannerMode === 'REPLENISH' && (
-                      <UniversalScanner mode="REPLENISH" data={replenishTasks} locations={locations} onUpdate={handleReplenishSubmit} onBack={()=>setScannerMode('IDLE')} onComplete={()=>{setScannerMode('IDLE'); fetchAll();}} />
+                      <UniversalScanner mode="REPLENISH" data={replenishTasks} locations={locations} inventory={inventory} onUpdate={handleReplenishSubmit} onBack={()=>setScannerMode('IDLE')} onComplete={()=>{setScannerMode('IDLE'); fetchAll();}} />
                   )}
               </div>
           </div>
@@ -1341,50 +1704,14 @@ export default function App() {
                     </div>
 
                     <div className="flex gap-6 h-full overflow-hidden">
-                        {/* The Visual Grid */}
+                        {/* The Visual Grid (Reusable Component) */}
                         <GlassCard noPad className="flex-1 relative bg-slate-50/50 overflow-hidden border-slate-200">
-                            <div className="absolute inset-0 p-8 overflow-auto macos-scrollbar">
-                                {/* Grid Container - Assuming 20x20 grid for this example */}
-                                <div className="relative w-[800px] h-[600px] bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:20px_20px]">
-                                    {locations
-                                        .filter(l => activeZone === 'All' || l.zone === activeZone)
-                                        .map(loc => {
-                                            // Calculate items in this bin
-                                            const itemCount = inventory.filter(i => i.location_code === loc.location_code).reduce((a,b) => a + b.quantity, 0);
-                                            const isOccupied = itemCount > 0;
-                                            
-                                            return (
-                                                <button
-                                                    key={loc.id}
-                                                    onClick={() => setSelectedLocation(loc)}
-                                                    style={{ 
-                                                        left: `${loc.x * 40}px`, // 40px multiplier for grid spacing
-                                                        top: `${loc.y * 40}px` 
-                                                    }}
-                                                    className={`absolute w-8 h-8 rounded-md shadow-sm border transition-all hover:scale-125 hover:z-10 flex items-center justify-center group
-                                                        ${loc.location_type === 'PICK' ? 'rounded-full' : 'rounded-md'}
-                                                        ${isOccupied ? 'bg-blue-500 border-blue-600 text-white' : 'bg-white border-slate-300 text-slate-300'}
-                                                    `}
-                                                >
-                                                    {/* Tooltip */}
-                                                    <span className="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-20">
-                                                        {loc.location_code}
-                                                    </span>
-                                                    
-                                                    {/* Icon */}
-                                                    <Box size={14} className={isOccupied ? "fill-blue-400/50" : ""} />
-                                                    
-                                                    {/* Badge for Qty */}
-                                                    {isOccupied && (
-                                                        <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full text-[8px] flex items-center justify-center border border-white">
-                                                            {inventory.filter(i=>i.location_code===loc.location_code).length}
-                                                        </span>
-                                                    )}
-                                                </button>
-                                            );
-                                    })}
-                                </div>
-                            </div>
+                            <WarehouseMap 
+                                locations={locations}
+                                inventory={inventory}
+                                activeZone={activeZone}
+                                onBinClick={setSelectedLocation}
+                            />
                         </GlassCard>
 
                         {/* Side Panel: Location Inspector */}
