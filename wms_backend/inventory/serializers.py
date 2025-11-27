@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import RMA, CycleCountSession, CycleCountTask, Item, Inventory, Location, LocationConfiguration, RMALine, ReplenishmentTask, TransactionLog, Order, OrderLine, Supplier, PurchaseOrder
+from .models import RMA, CycleCountSession, CycleCountTask, Item, Inventory, Location, LocationConfiguration, PickBatch, RMALine, ReplenishmentTask, TransactionLog, Order, OrderLine, Supplier, PurchaseOrder
 
 class ItemSerializer(serializers.ModelSerializer):
     class Meta:
@@ -30,6 +30,8 @@ class TransactionLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = TransactionLog
         fields = '__all__'
+
+
 
 class SupplierSerializer(serializers.ModelSerializer):
     class Meta:
@@ -115,3 +117,11 @@ class ReplenishmentTaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = ReplenishmentTask
         fields = ['id', 'item', 'item_sku', 'source_location', 'dest_location', 'qty_to_move', 'status', 'created_at']
+
+
+class PickBatchSerializer(serializers.ModelSerializer):
+    orders = OrderSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = PickBatch
+        fields = ['id', 'batch_number', 'picker', 'status', 'created_at', 'orders']

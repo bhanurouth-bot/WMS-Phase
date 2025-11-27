@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib.auth.models import User
 
 class Item(models.Model):
     sku = models.CharField(max_length=50, unique=True, db_index=True)
@@ -72,9 +73,13 @@ class TransactionLog(models.Model):
     location_snapshot = models.CharField(max_length=50)
     quantity_change = models.IntegerField() 
     lot_snapshot = models.CharField(max_length=50, blank=True, null=True)
+    
+    # [NEW] Track the user
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
 
     def __str__(self):
-        return f"[{self.timestamp}] {self.action}: {self.sku_snapshot} ({self.quantity_change})"
+        user_str = self.user.username if self.user else "System"
+        return f"[{self.timestamp}] {self.action} by {user_str}: {self.sku_snapshot}"
 
 class SerialNumber(models.Model):
     STATUS_CHOICES = [
@@ -122,6 +127,15 @@ class PurchaseOrder(models.Model):
     def __str__(self):
         return f"{self.po_number} - {self.supplier.name}"
 
+class PickBatch(models.Model):
+    batch_number = models.CharField(max_length=50, unique=True)
+    picker = models.ForeignKey('auth.User', on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, default='IN_PROGRESS') # IN_PROGRESS, COMPLETED
+
+    def __str__(self):
+        return self.batch_number
+
 class Order(models.Model):
     STATUS_CHOICES = [
         ('PENDING', 'Pending'),
@@ -143,6 +157,7 @@ class Order(models.Model):
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     created_at = models.DateTimeField(auto_now_add=True)
+    batch = models.ForeignKey(PickBatch, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
 
     def __str__(self):
         return f"Order {self.order_number} ({self.status})"
@@ -153,6 +168,7 @@ class OrderLine(models.Model):
     qty_ordered = models.IntegerField()
     qty_allocated = models.IntegerField(default=0)
     qty_picked = models.IntegerField(default=0)
+    
 
     def __str__(self):
         return f"{self.item.sku}: {self.qty_picked}/{self.qty_ordered}"

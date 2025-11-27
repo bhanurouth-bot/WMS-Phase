@@ -7,8 +7,10 @@ from django.db.models import Sum, Count, F
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
-from .serializers import CycleCountSessionSerializer, ItemSerializer, InventorySerializer, LocationConfigurationSerializer, LocationSerializer, PurchaseOrderSerializer, RMASerializer, ReplenishmentTaskSerializer, SupplierSerializer, TransactionLogSerializer, OrderSerializer
-from .models import RMA, CycleCountSession, Item, Inventory, Location, LocationConfiguration, PurchaseOrder, ReplenishmentTask, Supplier, TransactionLog, Order
+from .tasks import generate_wave_plan_task
+
+from .serializers import CycleCountSessionSerializer, ItemSerializer, InventorySerializer, LocationConfigurationSerializer, LocationSerializer, PickBatchSerializer, PurchaseOrderSerializer, RMASerializer, ReplenishmentTaskSerializer, SupplierSerializer, TransactionLogSerializer, OrderSerializer
+from .models import RMA, CycleCountSession, Item, Inventory, Location, LocationConfiguration, PickBatch, PurchaseOrder, ReplenishmentTask, Supplier, TransactionLog, Order
 from .services import InventoryService
 
 class ItemViewSet(viewsets.ModelViewSet):
@@ -43,11 +45,8 @@ class InventoryViewSet(viewsets.ModelViewSet):
             return Response({'error': 'SKU and Location required'}, status=400)
 
         # --- Pass status to service ---
-        result = InventoryService.receive_item(sku, location, qty, lot_number, expiry_date, inv_status)
-        
-        if "error" in result:
-            return Response(result, status=400)
-        return Response(result, status=200)
+        result = InventoryService.receive_item(sku, location, qty, lot_number, expiry_date, inv_status, serials=None, user=request.user)
+        return Response(result)
 
     @action(detail=True, methods=['post'])
     def pick(self, request, pk=None):
@@ -93,9 +92,7 @@ class InventoryViewSet(viewsets.ModelViewSet):
         if not all([sku, source_loc, dest_loc]):
             return Response({'error': 'Source, Dest, and SKU required'}, status=400)
 
-        result = InventoryService.move_item(sku, source_loc, dest_loc, qty)
-        if "error" in result:
-            return Response(result, status=400)
+        result = InventoryService.move_item(sku, source_loc, dest_loc, qty, user=request.user)
         return Response(result)
 
 class TransactionLogViewSet(viewsets.ReadOnlyModelViewSet):
@@ -190,11 +187,15 @@ class OrderViewSet(viewsets.ModelViewSet):
         order_ids = request.data.get('order_ids', [])
         if not order_ids:
              return Response({'error': 'No order IDs provided'}, status=400)
-             
-        result = InventoryService.generate_wave_plan(order_ids)
-        if "error" in result:
-            return Response(result, status=400)
-        return Response(result)
+        
+        # [NEW] Call the task asynchronously
+        task = generate_wave_plan_task.delay(order_ids)
+        
+        return Response({
+            "message": "Wave planning started.", 
+            "task_id": task.id, 
+            "status": "PROCESSING"
+        }, status=202) # 202 Accepted
 
     @action(detail=False, methods=['post'])
     def wave_complete(self, request):
@@ -228,7 +229,22 @@ class OrderViewSet(viewsets.ModelViewSet):
             filename=f"packing_slip_{pk}.pdf"
         )
     
-    
+class PickBatchViewSet(viewsets.ModelViewSet):
+    queryset = PickBatch.objects.all()
+    serializer_class = PickBatchSerializer
+
+    @action(detail=False, methods=['post'])
+    def create_cluster(self, request):
+        order_ids = request.data.get('order_ids', [])
+        res = InventoryService.create_cluster_batch(order_ids, request.user)
+        if "error" in res: return Response(res, status=400)
+        return Response(res)
+
+    @action(detail=True, methods=['get'])
+    def tasks(self, request, pk=None):
+        res = InventoryService.get_cluster_tasks(pk)
+        if "error" in res: return Response(res, status=400)
+        return Response(res)
 
 
 class SupplierViewSet(viewsets.ModelViewSet):

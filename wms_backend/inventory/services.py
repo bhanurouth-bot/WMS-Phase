@@ -7,7 +7,7 @@ from reportlab.lib import colors
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 import io
-from .models import RMA, CycleCountSession, CycleCountTask, Inventory, Item, LocationConfiguration, ReplenishmentTask, TransactionLog, Order, OrderLine, RMALine, PurchaseOrder, Location
+from .models import RMA, CycleCountSession, CycleCountTask, Inventory, Item, LocationConfiguration, PickBatch, ReplenishmentTask, TransactionLog, Order, OrderLine, RMALine, PurchaseOrder, Location
 from .models import SerialNumber
 class InventoryService:
     
@@ -25,7 +25,7 @@ class InventoryService:
         )
 
     @staticmethod
-    def receive_item(sku, location, quantity, lot_number=None, expiry_date=None, status='AVAILABLE', serials=None):
+    def receive_item(sku, location, quantity, lot_number=None, expiry_date=None, status='AVAILABLE', serials=None, user=None):
         with transaction.atomic():
             try:
                 item = Item.objects.get(sku=sku)
@@ -77,11 +77,10 @@ class InventoryService:
                 sku_snapshot=sku,
                 location_snapshot=location,
                 quantity_change=quantity,
-                lot_snapshot=clean_lot
+                lot_snapshot=clean_lot,
+                user=user # [NEW]
             )
-
-            # --- BROADCAST UPDATE ---
-            InventoryService.broadcast_update("INVENTORY_CHANGED")
+            return {"success": True, "new_qty": inventory.quantity, "id": inventory.id}
 
             return {"success": True, "new_qty": inventory.quantity, "id": inventory.id}
 
@@ -555,7 +554,7 @@ class InventoryService:
             return {"success": True, "results": results}
         
     @staticmethod
-    def move_item(sku, source_loc, dest_loc, qty):
+    def move_item(sku, source_loc, dest_loc, qty, user=None):
         with transaction.atomic():
             try:
                 source_inv = Inventory.objects.select_for_update().filter(
@@ -592,7 +591,8 @@ class InventoryService:
                 action='MOVE',
                 sku_snapshot=sku,
                 location_snapshot=f"{source_loc} > {dest_loc}",
-                quantity_change=qty
+                quantity_change=qty,
+                user=user # [NEW]
             )
 
             return {"success": True, "message": f"Moved {qty} of {sku} from {source_loc} to {dest_loc}"}
@@ -647,6 +647,97 @@ class InventoryService:
             task.status = 'COMPLETED'
             task.save()
             return {"success": True}
+        
+    @staticmethod
+    def create_cluster_batch(order_ids, user=None):
+        with transaction.atomic():
+            # 1. Validate Orders
+            orders = Order.objects.filter(id__in=order_ids, status='ALLOCATED', batch__isnull=True)
+            if len(orders) != len(order_ids):
+                return {"error": "Some orders are not ALLOCATED or already in a batch."}
+
+            # 2. Create Batch
+            batch_num = f"BATCH-{random.randint(10000,99999)}"
+            batch = PickBatch.objects.create(batch_number=batch_num, picker=user)
+            
+            # 3. Link Orders
+            orders.update(batch=batch)
+
+            return {"success": True, "batch_id": batch.id, "batch_number": batch_num}
+
+    @staticmethod
+    def get_cluster_tasks(batch_id):
+        """
+        Aggregates items from all orders in the batch to minimize walking.
+        Returns a list of locations to visit, and what to put in each tote (Order).
+        """
+        try:
+            batch = PickBatch.objects.get(id=batch_id)
+        except PickBatch.DoesNotExist:
+            return {"error": "Batch not found"}
+
+        # 1. Calculate Total Demand per SKU
+        sku_demand = {} # { 'SKU_A': { 'total': 5, 'allocations': [{'order': 'ORD-1', 'qty': 2}, ...] } }
+        
+        for order in batch.orders.all():
+            for line in order.lines.all():
+                remaining = line.qty_allocated - line.qty_picked
+                if remaining > 0:
+                    if line.item.sku not in sku_demand:
+                        sku_demand[line.item.sku] = {'total': 0, 'allocations': []}
+                    
+                    sku_demand[line.item.sku]['total'] += remaining
+                    sku_demand[line.item.sku]['allocations'].append({
+                        'order_number': order.order_number,
+                        'qty': remaining,
+                        'line_id': line.id
+                    })
+
+        # 2. Find Locations for aggregated demand (FEFO)
+        tasks = []
+        
+        for sku, requirements in sku_demand.items():
+            qty_needed = requirements['total']
+            
+            # Find best bins
+            inventory = Inventory.objects.filter(item__sku=sku, quantity__gt=0, status='AVAILABLE').order_by('expiry_date', 'quantity')
+            
+            for inv in inventory:
+                if qty_needed <= 0: break
+                
+                take = min(inv.quantity, qty_needed)
+                
+                # Distribute this 'take' quantity among the waiting orders
+                current_bin_allocations = []
+                take_distributed = take
+                
+                for alloc in requirements['allocations']:
+                    if take_distributed <= 0: break
+                    if alloc['qty'] > 0:
+                        amount_for_this_order = min(alloc['qty'], take_distributed)
+                        current_bin_allocations.append({
+                            'order_number': alloc['order_number'],
+                            'qty': amount_for_this_order,
+                            'line_id': alloc['line_id'] # Needed to update pick status later
+                        })
+                        alloc['qty'] -= amount_for_this_order
+                        take_distributed -= amount_for_this_order
+
+                tasks.append({
+                    'location': inv.location_code,
+                    'sku': sku,
+                    'image_url': "placeholder.png", # Add real image field to Item model if needed
+                    'total_qty_to_pick': take,
+                    'distribute_to': current_bin_allocations
+                })
+                
+                qty_needed -= take
+
+        # 3. Sort tasks by location (Optimized Walk Path)
+        # Simple alpha-sort for now. In production, use Location.x/y or Z-order curve
+        tasks.sort(key=lambda x: x['location'])
+        
+        return tasks
     
     @staticmethod
     def record_short_pick(order_id, sku, location_code, qty_missing, user=None):
