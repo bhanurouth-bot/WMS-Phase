@@ -5,7 +5,8 @@ import {
   Layers, LayoutDashboard, 
   X, ChevronRight, ArrowLeft, Barcode, CheckCircle2, MapPin, ArrowRightCircle,
   ArrowDownCircle, PackageCheck, ArrowRightLeft, ClipboardList, Settings2, Play,
-  Grid, Trash2, Map as MapIcon, Download, CalendarClock, QrCode, LogOut, User
+  Grid, Trash2, Map as MapIcon, Download, CalendarClock, QrCode, LogOut, User,
+  Moon, Sun
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useScanDetection } from './hooks/useScanDetection';
@@ -13,6 +14,7 @@ import Login from './Login';
 import MobilePicker from './MobilePicker';
 import { parseGS1 } from './utils/gs1'; 
 import BarcodeGenerator from './BarcodeGenerator';
+import CursorAura from './CursorAura';
 
 // --- API CONFIG ---
 const API_URL = 'http://127.0.0.1:8000/api';
@@ -59,7 +61,7 @@ const MacTrafficLights = ({ onRed, onYellow, onGreen }: { onRed: () => void, onY
 );
 
 const GlassCard = ({ children, className = "", noPad = false }: any) => (
-  <div className={`bg-white/40 backdrop-blur-xl border border-white/50 shadow-lg rounded-2xl ${noPad ? '' : 'p-6'} ${className}`}>
+  <div className={`bg-white/40 dark:bg-slate-800/40 backdrop-blur-xl border border-white/50 dark:border-white/10 shadow-lg rounded-2xl ${noPad ? '' : 'p-6'} ${className}`}>
     {children}
   </div>
 );
@@ -69,32 +71,32 @@ const DockItem = ({ icon: Icon, label, active, onClick }: any) => (
     onClick={onClick}
     className={`group relative flex flex-col items-center gap-1 transition-all duration-300 ${active ? '-translate-y-2 scale-110' : 'hover:-translate-y-1 hover:scale-105'}`}
   >
-    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transition-all border border-white/20
-      ${active ? 'bg-gradient-to-b from-blue-400 to-blue-600 text-white' : 'bg-white/30 backdrop-blur-md text-slate-700 hover:bg-white/50'}`}>
+    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transition-all border border-white/20 dark:border-white/10
+      ${active ? 'bg-gradient-to-b from-blue-400 to-blue-600 text-white' : 'bg-white/30 dark:bg-slate-800/50 backdrop-blur-md text-slate-700 dark:text-slate-300 hover:bg-white/50 dark:hover:bg-slate-700/50'}`}>
       <Icon size={24} strokeWidth={2} />
     </div>
-    <span className={`absolute -top-10 bg-slate-800 text-white text-[10px] px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none`}>
+    <span className={`absolute -top-10 bg-slate-800 dark:bg-white text-white dark:text-slate-900 text-[10px] px-2 py-1 rounded-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none`}>
       {label}
     </span>
-    {active && <div className="w-1 h-1 rounded-full bg-slate-400 mt-1"></div>}
+    {active && <div className="w-1 h-1 rounded-full bg-slate-400 dark:bg-slate-500 mt-1"></div>}
   </button>
 );
 
 const StatusBadge = ({ status }: { status: string }) => {
   const styles: any = {
-    PENDING: 'bg-yellow-500/20 text-yellow-800 border-yellow-500/30',
-    ALLOCATED: 'bg-blue-500/20 text-blue-800 border-blue-500/30',
-    PICKED: 'bg-purple-500/20 text-purple-800 border-purple-500/30',
-    PACKED: 'bg-orange-500/20 text-orange-800 border-orange-500/30',
-    SHIPPED: 'bg-green-500/20 text-green-800 border-green-500/30',
-    REQUESTED: 'bg-red-500/20 text-red-800 border-red-500/30',
-    RECEIVED: 'bg-teal-500/20 text-teal-800 border-teal-500/30',
-    DRAFT: 'bg-slate-500/20 text-slate-800 border-slate-500/30',
-    ORDERED: 'bg-blue-500/20 text-blue-800 border-blue-500/30',
-    COMPLETED: 'bg-green-500/20 text-green-800 border-green-500/30',
+    PENDING: 'bg-yellow-500/20 text-yellow-800 dark:text-yellow-300 border-yellow-500/30',
+    ALLOCATED: 'bg-blue-500/20 text-blue-800 dark:text-blue-300 border-blue-500/30',
+    PICKED: 'bg-purple-500/20 text-purple-800 dark:text-purple-300 border-purple-500/30',
+    PACKED: 'bg-orange-500/20 text-orange-800 dark:text-orange-300 border-orange-500/30',
+    SHIPPED: 'bg-green-500/20 text-green-800 dark:text-green-300 border-green-500/30',
+    REQUESTED: 'bg-red-500/20 text-red-800 dark:text-red-300 border-red-500/30',
+    RECEIVED: 'bg-teal-500/20 text-teal-800 dark:text-teal-300 border-teal-500/30',
+    DRAFT: 'bg-slate-500/20 text-slate-800 dark:text-slate-300 border-slate-500/30',
+    ORDERED: 'bg-blue-500/20 text-blue-800 dark:text-blue-300 border-blue-500/30',
+    COMPLETED: 'bg-green-500/20 text-green-800 dark:text-green-300 border-green-500/30',
   };
   return (
-    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${styles[status] || 'bg-gray-200 text-gray-700'} uppercase tracking-wide`}>
+    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${styles[status] || 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'} uppercase tracking-wide`}>
       {status}
     </span>
   );
@@ -104,7 +106,7 @@ const StatusBadge = ({ status }: { status: string }) => {
 const WarehouseMap = ({ locations, inventory, activeZone, onBinClick, targetLocation, showOnlyTargetZone }: any) => {
     if (!locations || locations.length === 0) {
         return (
-            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 rounded-xl bg-white/50">
+            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl bg-white/50 dark:bg-slate-800/50">
                 <MapIcon size={48} className="opacity-50 mb-2"/>
                 <p className="font-bold">No Locations Found</p>
                 <p className="text-xs">Add bins in the 'Layout' tab first.</p>
@@ -128,10 +130,10 @@ const WarehouseMap = ({ locations, inventory, activeZone, onBinClick, targetLoca
     const gridHeight = (maxY + 2) * 40;
 
     return (
-        <div className="relative w-full h-full bg-slate-50/50 overflow-hidden border-slate-200 rounded-xl">
+        <div className="relative w-full h-full bg-slate-50/50 dark:bg-slate-900/50 overflow-hidden border-slate-200 dark:border-slate-700 rounded-xl">
             <div className="absolute inset-0 p-8 overflow-auto macos-scrollbar flex items-start justify-start">
                 <div 
-                    className="relative bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] [background-size:40px_40px] border border-slate-200/50 rounded-lg shadow-inner transition-all duration-500"
+                    className="relative bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] dark:bg-[radial-gradient(#334155_1px,transparent_1px)] [background-size:40px_40px] border border-slate-200/50 dark:border-slate-700/50 rounded-lg shadow-inner transition-all duration-500"
                     style={{ width: `${gridWidth}px`, height: `${gridHeight}px` }}
                 >
                     {filteredLocations.map((loc:any) => {
@@ -158,7 +160,7 @@ const WarehouseMap = ({ locations, inventory, activeZone, onBinClick, targetLoca
                                 className={`absolute w-8 h-8 rounded-md shadow-sm border flex items-center justify-center group transition-colors duration-200
                                     ${loc.location_type === 'PICK' ? 'rounded-full' : 'rounded-md'}
                                     ${isTarget ? 'bg-blue-600 border-blue-500 text-white' : 
-                                      isOccupied ? 'bg-white border-blue-400 text-blue-600 font-bold' : 'bg-white border-slate-200 text-slate-300'}
+                                      isOccupied ? 'bg-white dark:bg-slate-800 border-blue-400 text-blue-600 dark:text-blue-400 font-bold' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-300 dark:text-slate-600'}
                                 `}
                             >
                                 {/* Tooltip */}
@@ -184,17 +186,17 @@ const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   const imageUrl = `http://api.labelary.com/v1/printers/8dpmm/labels/4x6/0/${encodeURIComponent(zpl)}`;
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-white/20">
-        <div className="bg-slate-900 text-white p-4 flex justify-between items-center">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden border border-white/20 dark:border-white/10">
+        <div className="bg-slate-900 dark:bg-black text-white p-4 flex justify-between items-center">
           <div className="flex items-center gap-2"><Printer size={16} className="text-green-400" /><span className="font-bold text-sm">Print Preview</span></div>
           <button onClick={onClose} className="hover:bg-white/20 p-1 rounded transition-colors"><X size={16}/></button>
         </div>
-        <div className="p-8 bg-slate-100 flex flex-col items-center">
+        <div className="p-8 bg-slate-100 dark:bg-slate-950 flex flex-col items-center">
           <div className="bg-white p-2 shadow-xl border border-slate-200 rotate-0 hover:scale-105 transition-transform duration-300">
              <img src={imageUrl} alt="Shipping Label" className="w-64 h-auto object-contain min-h-[300px] bg-gray-50" />
           </div>
           <div className="mt-8 w-full grid grid-cols-2 gap-3">
-             <button onClick={onClose} className="py-2 rounded-xl font-bold text-slate-500 hover:bg-slate-200 text-sm transition-colors">Cancel</button>
+             <button onClick={onClose} className="py-2 rounded-xl font-bold text-slate-500 hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-800 text-sm transition-colors">Cancel</button>
              <button onClick={() => { alert("Sent to Printer"); onClose(); }} className="py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-500/20">Print Now</button>
           </div>
         </div>
@@ -221,42 +223,42 @@ const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
 
     return (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in duration-200">
-            <div className="bg-white/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-8 shadow-2xl border border-white/40">
+            <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-8 shadow-2xl border border-white/40 dark:border-white/10">
                 <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800"><ArrowDownCircle className="text-emerald-600"/> Quick Receive</h2>
-                    <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800 dark:text-white"><ArrowDownCircle className="text-emerald-600"/> Quick Receive</h2>
+                    <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600 dark:hover:text-white"/></button>
                 </div>
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">Product (SKU)</label>
-                        <select name="sku" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" required>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Product (SKU)</label>
+                        <select name="sku" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required>
                             {items.map((i:any) => <option key={i.id} value={i.sku}>{i.sku} - {i.name}</option>)}
                         </select>
                     </div>
                     <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">Putaway Location</label>
-                        <select name="location" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1 font-mono" required>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Putaway Location</label>
+                        <select name="location" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 font-mono" required>
                             {locations.map((l:any) => <option key={l.id} value={l.location_code}>{l.location_code} ({l.location_type})</option>)}
                         </select>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                         <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase">Quantity</label>
-                            <input name="quantity" type="number" min="1" defaultValue="1" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" required />
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Quantity</label>
+                            <input name="quantity" type="number" min="1" defaultValue="1" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required />
                         </div>
                         <div>
-                            <label className="text-[10px] font-bold text-slate-500 uppercase">Lot # (Optional)</label>
-                            <input name="lot" placeholder="L-123" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" />
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Lot # (Optional)</label>
+                            <input name="lot" placeholder="L-123" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" />
                         </div>
                     </div>
                     <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">Expiry (Optional)</label>
-                        <input name="expiry" type="date" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1" />
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Expiry (Optional)</label>
+                        <input name="expiry" type="date" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" />
                     </div>
                     
                     <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">Status (QC)</label>
-                        <select name="status" className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1 font-bold text-slate-700">
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Status (QC)</label>
+                        <select name="status" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm mt-1 font-bold text-slate-700 dark:text-white">
                             <option value="AVAILABLE">Available (Good Stock)</option>
                             <option value="DAMAGED">Damaged (Do Not Sell)</option>
                             <option value="QUARANTINE">Quarantine (Hold)</option>
@@ -264,11 +266,11 @@ const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
                     </div>
 
                     <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase">Serial Numbers</label>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Serial Numbers</label>
                         <textarea 
                             name="serials" 
                             placeholder="Comma separated (e.g. SN1, SN2, SN3)" 
-                            className="w-full p-2 rounded-lg border border-slate-200 text-sm mt-1 h-20 resize-none"
+                            className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 h-20 resize-none"
                         />
                         <p className="text-[10px] text-slate-400 mt-1">Required if item is Serialized.</p>
                     </div>
@@ -294,36 +296,36 @@ const CreateOrderModal = ({ onClose, onSubmit, items }: any) => {
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in duration-200">
-      <div className="bg-white/90 backdrop-blur-xl rounded-2xl w-full max-w-2xl p-8 shadow-2xl border border-white/40">
+      <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl w-full max-w-2xl p-8 shadow-2xl border border-white/40 dark:border-white/10">
         <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800"><Plus className="text-blue-600"/> Create Sales Order</h2>
-            <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
+            <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800 dark:text-white"><Plus className="text-blue-600"/> Create Sales Order</h2>
+            <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600 dark:hover:text-white"/></button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-2 gap-6">
              <div className="space-y-3">
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b pb-1">Customer Info</h3>
-                <input required value={formData.customer_name} onChange={e=>setFormData({...formData, customer_name: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Full Name" />
-                <input required value={formData.customer_email} onChange={e=>setFormData({...formData, customer_email: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Email (Optional)" />
-                <input required value={formData.customer_address} onChange={e=>setFormData({...formData, customer_address: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="Address" />
+                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b dark:border-white/10 pb-1">Customer Info</h3>
+                <input required value={formData.customer_name} onChange={e=>setFormData({...formData, customer_name: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20 dark:text-white" placeholder="Full Name" />
+                <input required value={formData.customer_email} onChange={e=>setFormData({...formData, customer_email: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20 dark:text-white" placeholder="Email (Optional)" />
+                <input required value={formData.customer_address} onChange={e=>setFormData({...formData, customer_address: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20 dark:text-white" placeholder="Address" />
                 
                 <div className="grid grid-cols-2 gap-2">
-                    <input required value={formData.customer_city} onChange={e=>setFormData({...formData, customer_city: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="City" />
-                    <input required value={formData.customer_state} onChange={e=>setFormData({...formData, customer_state: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="State" />
+                    <input required value={formData.customer_city} onChange={e=>setFormData({...formData, customer_city: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none dark:text-white" placeholder="City" />
+                    <input required value={formData.customer_state} onChange={e=>setFormData({...formData, customer_state: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none dark:text-white" placeholder="State" />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                    <input required value={formData.customer_zip} onChange={e=>setFormData({...formData, customer_zip: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="Zip Code" />
-                    <input required value={formData.customer_country} onChange={e=>setFormData({...formData, customer_country: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" placeholder="Country" />
+                    <input required value={formData.customer_zip} onChange={e=>setFormData({...formData, customer_zip: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none dark:text-white" placeholder="Zip Code" />
+                    <input required value={formData.customer_country} onChange={e=>setFormData({...formData, customer_country: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none dark:text-white" placeholder="Country" />
                 </div>
              </div>
              <div className="space-y-3">
-                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b pb-1">Order Details</h3>
-                <select required value={formData.sku} onChange={e=>setFormData({...formData, sku: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none">
+                <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b dark:border-white/10 pb-1">Order Details</h3>
+                <select required value={formData.sku} onChange={e=>setFormData({...formData, sku: e.target.value})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none dark:text-white">
                     <option value="">-- Select Item --</option>
                     {items.map((i: any) => <option key={i.id} value={i.sku}>{i.sku} - {i.name}</option>)}
                 </select>
-                <input type="number" min="1" required value={formData.qty} onChange={e=>setFormData({...formData, qty: parseInt(e.target.value)})} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none" />
-                <div className="bg-blue-50 p-3 rounded-lg text-xs text-blue-700">
+                <input type="number" min="1" required value={formData.qty} onChange={e=>setFormData({...formData, qty: parseInt(e.target.value)})} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none dark:text-white" />
+                <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg text-xs text-blue-700 dark:text-blue-300">
                     <p>Note: Orders start in <strong>PENDING</strong> state. You must Allocate inventory to generate Pick tasks.</p>
                 </div>
              </div>
@@ -351,38 +353,38 @@ const CreateLocationModal = ({ onClose, onSubmit }: any) => {
   
     return (
       <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in duration-200">
-        <div className="bg-white/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-8 shadow-2xl border border-white/40">
+        <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-8 shadow-2xl border border-white/40 dark:border-white/10">
           <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800"><MapIcon className="text-indigo-600"/> Add Location</h2>
-              <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600"/></button>
+              <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800 dark:text-white"><MapIcon className="text-indigo-600"/> Add Location</h2>
+              <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600 dark:hover:text-white"/></button>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-                <label className="text-[10px] font-bold text-slate-500 uppercase">Code</label>
-                <input name="code" placeholder="A-01-01" className="w-full p-2 rounded-lg border border-slate-200 text-sm font-mono uppercase focus:ring-2 ring-indigo-500/20 outline-none" required autoFocus/>
+                <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Code</label>
+                <input name="code" placeholder="A-01-01" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm font-mono uppercase focus:ring-2 ring-indigo-500/20 outline-none" required autoFocus/>
             </div>
             <div className="grid grid-cols-2 gap-4">
                 <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">Type</label>
-                    <select name="type" className="w-full p-2 rounded-lg border border-slate-200 text-sm outline-none" required>
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Type</label>
+                    <select name="type" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm outline-none" required>
                         <option value="RESERVE">Reserve</option>
                         <option value="PICK">Pick Face</option>
                         <option value="DOCK">Dock</option>
                     </select>
                 </div>
                 <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">Zone</label>
-                    <input name="zone" placeholder="Zone A" className="w-full p-2 rounded-lg border border-slate-200 text-sm outline-none" required />
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Zone</label>
+                    <input name="zone" placeholder="Zone A" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm outline-none" required />
                 </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
                 <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">Grid X</label>
-                    <input name="x" type="number" placeholder="0" className="w-full p-2 rounded-lg border border-slate-200 text-sm outline-none" />
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Grid X</label>
+                    <input name="x" type="number" placeholder="0" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm outline-none" />
                 </div>
                 <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase">Grid Y</label>
-                    <input name="y" type="number" placeholder="0" className="w-full p-2 rounded-lg border border-slate-200 text-sm outline-none" />
+                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Grid Y</label>
+                    <input name="y" type="number" placeholder="0" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm outline-none" />
                 </div>
             </div>
             <button type="submit" className="w-full py-2.5 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 shadow-lg transition-transform active:scale-95 text-sm">Create Bin</button>
@@ -410,15 +412,15 @@ const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
 
     return (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in">
-            <div className="bg-white/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-6 shadow-2xl border border-white/40">
+            <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-6 shadow-2xl border border-white/40 dark:border-white/10">
                 <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800"><RotateCcw size={18} className="text-red-500"/> Process Return</h2>
-                    <button onClick={onClose}><X size={18} className="text-slate-400"/></button>
+                    <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800 dark:text-white"><RotateCcw size={18} className="text-red-500"/> Process Return</h2>
+                    <button onClick={onClose}><X size={18} className="text-slate-400 hover:text-slate-600 dark:hover:text-white"/></button>
                 </div>
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div>
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Select Order</label>
-                        <select required value={selectedOrderId} onChange={e=>setSelectedOrderId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none">
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Select Order</label>
+                        <select required value={selectedOrderId} onChange={e=>setSelectedOrderId(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none dark:text-white">
                             <option value="">-- Shipped Orders --</option>
                             {orders.filter((o:any) => o.status === 'SHIPPED').map((o:any) => (
                                 <option key={o.id} value={o.id}>{o.order_number} - {o.customer_name}</option>
@@ -426,8 +428,8 @@ const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
                         </select>
                     </div>
                     <div>
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Reason</label>
-                        <textarea required value={reason} onChange={e=>setReason(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-lg text-sm outline-none h-24 resize-none" placeholder="Reason for return..." />
+                        <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-1">Reason</label>
+                        <textarea required value={reason} onChange={e=>setReason(e.target.value)} className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-2 rounded-lg text-sm outline-none h-24 resize-none dark:text-white" placeholder="Reason for return..." />
                     </div>
                     <button type="submit" className="w-full py-2 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg shadow-md text-sm transition-transform active:scale-95">Create RMA</button>
                 </form>
@@ -994,16 +996,16 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
         <div className="h-full flex flex-col animate-in fade-in slide-in-from-bottom-4">
             <div className="flex justify-between items-center mb-6">
                 <div className="flex items-center gap-4">
-                    <button onClick={onBack} className="bg-white/50 p-2 rounded-xl hover:bg-white transition-colors"><ArrowLeft/></button>
+                    <button onClick={onBack} className="bg-white/50 dark:bg-slate-800/50 p-2 rounded-xl hover:bg-white dark:hover:bg-slate-700 transition-colors"><ArrowLeft className="dark:text-white" size={20}/></button>
                     <div>
-                        <div className="text-2xl font-bold text-slate-800 flex items-center gap-3">
-                            Packing Station <span className="text-sm font-mono bg-slate-200 px-2 py-1 rounded text-slate-600">{order.order_number}</span>
+                        <div className="text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-3">
+                            Packing Station <span className="text-sm font-mono bg-slate-200 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300">{order.order_number}</span>
                         </div>
-                        <div className="text-xs text-slate-500">{order.customer_name} · {order.customer_city}</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">{order.customer_name} · {order.customer_city}</div>
                     </div>
                 </div>
                 <div className="text-right">
-                    <div className="text-3xl font-bold text-blue-600">{currentPacked} <span className="text-lg text-slate-400">/ {totalItems}</span></div>
+                    <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">{currentPacked} <span className="text-lg text-slate-400">/ {totalItems}</span></div>
                     <div className="text-xs font-bold uppercase text-slate-400">Items Scanned</div>
                 </div>
             </div>
@@ -1016,15 +1018,15 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                         const isComplete = packed >= line.qty_picked;
                         
                         return (
-                            <div key={line.id} className={`p-4 rounded-xl border-2 transition-all ${isComplete ? 'bg-green-50 border-green-200 opacity-60' : 'bg-white border-white shadow-sm'}`}>
+                            <div key={line.id} className={`p-4 rounded-xl border-2 transition-all ${isComplete ? 'bg-green-50 border-green-200 opacity-60 dark:bg-green-900/20 dark:border-green-800' : 'bg-white dark:bg-slate-800 border-white dark:border-slate-700 shadow-sm'}`}>
                                 <div className="flex justify-between items-start">
                                     <div>
-                                        <div className="font-bold text-slate-700">{line.item_sku}</div>
-                                        <div className="text-xs text-slate-500">Qty Picked: {line.qty_picked}</div>
+                                        <div className="font-bold text-slate-700 dark:text-slate-200">{line.item_sku}</div>
+                                        <div className="text-xs text-slate-500 dark:text-slate-400">Qty Picked: {line.qty_picked}</div>
                                     </div>
-                                    {isComplete ? <CheckCircle2 className="text-green-500"/> : <div className="text-xl font-bold text-slate-300">{packed}/{line.qty_picked}</div>}
+                                    {isComplete ? <CheckCircle2 className="text-green-500"/> : <div className="text-xl font-bold text-slate-300 dark:text-slate-600">{packed}/{line.qty_picked}</div>}
                                 </div>
-                                <div className="mt-2 h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                <div className="mt-2 h-1.5 w-full bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
                                     <div className={`h-full transition-all duration-300 ${isComplete?'bg-green-500':'bg-blue-500'}`} style={{width: `${(packed/line.qty_picked)*100}%`}}></div>
                                 </div>
                             </div>
@@ -1033,15 +1035,15 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 </div>
 
                 <div className={`flex-1 rounded-3xl border-2 flex flex-col items-center justify-center relative p-8 transition-colors duration-500
-                    ${scanStep === 'LOT' ? 'bg-purple-50 border-purple-200' : 'bg-slate-100/50 border-slate-200'}`}>
+                    ${scanStep === 'LOT' ? 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800' : 'bg-slate-100/50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700'}`}>
                     
                     <div className={`w-64 h-64 border-4 border-dashed rounded-2xl flex items-center justify-center mb-8 transition-all 
-                        ${currentPacked===totalItems ? 'border-green-400 bg-green-50' : scanStep==='LOT' ? 'border-purple-300 bg-purple-100' : 'border-slate-300'}`}>
-                        <PackageCheck size={64} className={currentPacked===totalItems ? 'text-green-500' : scanStep==='LOT' ? 'text-purple-500' : 'text-slate-300'}/>
+                        ${currentPacked===totalItems ? 'border-green-400 bg-green-50 dark:bg-green-900/20' : scanStep==='LOT' ? 'border-purple-300 bg-purple-100 dark:bg-purple-900/20' : 'border-slate-300 dark:border-slate-600'}`}>
+                        <PackageCheck size={64} className={currentPacked===totalItems ? 'text-green-500' : scanStep==='LOT' ? 'text-purple-500' : 'text-slate-300 dark:text-slate-600'}/>
                     </div>
                     
                     <form onSubmit={handleScan} className="w-full max-w-md relative z-10">
-                        <div className={`text-center mb-4 font-bold uppercase tracking-widest transition-colors ${scanStep === 'LOT' ? 'text-purple-600 scale-110' : 'text-slate-400'}`}>
+                        <div className={`text-center mb-4 font-bold uppercase tracking-widest transition-colors ${scanStep === 'LOT' ? 'text-purple-600 dark:text-purple-400 scale-110' : 'text-slate-400'}`}>
                             {scanStep === 'SKU' ? 'Step 1: Scan Item SKU' : `Step 2: Scan Lot for ${activeSku}`}
                         </div>
                         
@@ -1051,7 +1053,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                                 value={input} 
                                 onChange={e=>setInput(e.target.value)} 
                                 placeholder={scanStep === 'SKU' ? "Scan SKU (or SKU|LOT)..." : "Scan Lot Number..."}
-                                className={`w-full p-4 pl-12 rounded-xl shadow-lg border-2 outline-none text-lg font-mono transition-all
+                                className={`w-full p-4 pl-12 rounded-xl shadow-lg border-2 outline-none text-lg font-mono transition-all bg-white dark:bg-slate-800 dark:text-white
                                     ${scanStep === 'LOT' ? 'border-purple-500 focus:ring-4 ring-purple-500/20' : 'border-transparent focus:border-blue-500'}`}
                             />
                             <Barcode className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${scanStep === 'LOT' ? 'text-purple-500' : 'text-slate-400'}`}/>
@@ -1063,7 +1065,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
 
                     <div className="mt-8 grid grid-cols-3 gap-4 w-full max-w-lg">
                         {['Small Box', 'Medium Box', 'Large Box'].map(size => (
-                            <button key={size} onClick={()=>setBoxSize(size)} className={`p-3 rounded-xl border-2 font-bold text-sm transition-all ${boxSize===size ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-white bg-white text-slate-500 hover:border-blue-200'}`}>{size}</button>
+                            <button key={size} onClick={()=>setBoxSize(size)} className={`p-3 rounded-xl border-2 font-bold text-sm transition-all ${boxSize===size ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'border-white dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:border-blue-200 dark:hover:border-slate-500'}`}>{size}</button>
                         ))}
                     </div>
                 </div>
@@ -1074,7 +1076,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                     href={`${API_URL}/orders/${order.id}/packing_slip/`}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-blue-600 font-bold hover:underline flex items-center gap-2"
+                    className="text-blue-600 dark:text-blue-400 font-bold hover:underline flex items-center gap-2"
                 >
                     <ClipboardList size={18}/> Download Packing Slip
                 </a>
@@ -1102,6 +1104,26 @@ export default function App() {
   
   // New Profile Menu State
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+
+  // Dark Mode State
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('theme') === 'dark' || 
+        (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+    return false;
+  });
+
+  // Dark Mode Effect
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
+  }, [darkMode]);
 
   // Data
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -1551,47 +1573,62 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen bg-[url('https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop')] bg-cover bg-center overflow-hidden flex flex-col items-center justify-center p-6 text-slate-800 font-sans selection:bg-blue-200">
+    <div className="h-screen w-screen overflow-hidden flex flex-col items-center justify-center p-6 text-slate-800 font-sans selection:bg-blue-200 dark:text-slate-100 dark:selection:bg-blue-900 transition-colors duration-500">
       <style>{`
         .macos-scrollbar::-webkit-scrollbar { background: transparent; width: 8px; height: 8px; }
         .macos-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(0, 0, 0, 0.2); border-radius: 4px; }
         .macos-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(0, 0, 0, 0.3); }
+        .dark .macos-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.2); }
+        .dark .macos-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.3); }
       `}</style>
+      
+      {/* [NEW] Cursor Aura Effect (Only visible in Dark Mode) */}
+      {darkMode && <CursorAura />}
+
       {showLabel && <LabelModal zpl={currentZpl} onClose={()=>setShowLabel(false)} />}
       {showOrderModal && <CreateOrderModal items={items} onClose={()=>setShowOrderModal(false)} onSubmit={handleCreateOrder} />}
       {showRMAModal && <CreateRMAModal orders={orders} onClose={()=>setShowRMAModal(false)} onSubmit={handleCreateRMA} />}
       {showLocationModal && <CreateLocationModal onClose={()=>setShowLocationModal(false)} onSubmit={handleCreateLocation} />}
       {showQuickReceive && <QuickReceiveModal items={items} locations={locations} onClose={()=>setShowQuickReceive(false)} onSubmit={handleQuickReceive} />}
 
-      <div className="w-full max-w-[1400px] h-[85vh] bg-white/60 backdrop-blur-2xl rounded-[2rem] shadow-2xl border border-white/40 flex flex-col relative overflow-hidden animate-in fade-in zoom-in duration-500">
+      <div className="w-full max-w-[1400px] h-[85vh] bg-white/60 dark:bg-slate-900/60 backdrop-blur-2xl rounded-[2rem] shadow-2xl border border-white/40 dark:border-white/10 flex flex-col relative overflow-hidden animate-in fade-in zoom-in duration-500 z-10">
         
         {/* Toolbar */}
-        <div className="h-12 flex items-center justify-between px-6 bg-white/10 border-b border-black/5 shrink-0">
+        <div className="h-12 flex items-center justify-between px-6 bg-white/10 border-b border-black/5 dark:border-white/5 shrink-0">
             <div className="flex items-center gap-4 w-40"><MacTrafficLights onRed={handleLogout} onYellow={handleBack} onGreen={toggleFullscreen} /></div>
-            <div className="font-semibold text-sm text-slate-600/80 flex items-center gap-2"><Layers size={14} className="text-blue-600"/> NexWMS <span className="text-slate-400">v3.0</span></div>
+            <div className="font-semibold text-sm text-slate-600/80 dark:text-slate-300 flex items-center gap-2"><Layers size={14} className="text-blue-600 dark:text-blue-400"/> NexWMS <span className="text-slate-400">v3.0</span></div>
             <div className="w-40 flex justify-end items-center gap-3">
-                <button onClick={fetchAll} className="p-2 hover:bg-black/5 rounded-full transition-colors text-slate-500">
+                {/* [NEW] Dark Mode Toggle */}
+                <button 
+                  onClick={() => setDarkMode(!darkMode)} 
+                  className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors text-slate-500 dark:text-slate-400"
+                  title="Toggle Theme"
+                >
+                  {darkMode ? <Sun size={16} className="text-yellow-400"/> : <Moon size={16}/>}
+                </button>
+
+                <button onClick={fetchAll} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors text-slate-500 dark:text-slate-400">
                     <RefreshCw size={16}/>
                 </button>
-                <div className="h-6 w-px bg-slate-300/50 mx-1"></div>
+                <div className="h-6 w-px bg-slate-300/50 dark:bg-slate-700/50 mx-1"></div>
                 <div className="relative">
                     <button 
                         onClick={() => setShowProfileMenu(!showProfileMenu)}
-                        className="flex items-center gap-2 hover:bg-white/40 p-1.5 pr-3 rounded-full transition-all border border-transparent hover:border-white/40"
+                        className="flex items-center gap-2 hover:bg-white/40 dark:hover:bg-white/10 p-1.5 pr-3 rounded-full transition-all border border-transparent hover:border-white/40"
                     >
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md">
                             <User size={16}/>
                         </div>
-                        <div className="text-xs font-bold text-slate-600 hidden xl:block">Admin</div>
+                        <div className="text-xs font-bold text-slate-600 dark:text-slate-300 hidden xl:block">Admin</div>
                     </button>
 
                     {showProfileMenu && (
                         <>
                             <div className="fixed inset-0 z-40" onClick={() => setShowProfileMenu(false)}></div>
-                            <div className="absolute right-0 top-12 w-56 bg-white/80 backdrop-blur-2xl border border-white/60 rounded-2xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-top-2">
-                                <div className="px-4 py-3 border-b border-black/5 mb-1">
-                                    <div className="text-sm font-bold text-slate-800">Warehouse Admin</div>
-                                    <div className="text-[10px] text-slate-500 font-medium">admin@nexwms.com</div>
+                            <div className="absolute right-0 top-12 w-56 bg-white/80 dark:bg-slate-900/80 backdrop-blur-2xl border border-white/60 dark:border-white/10 rounded-2xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-top-2">
+                                <div className="px-4 py-3 border-b border-black/5 dark:border-white/10 mb-1">
+                                    <div className="text-sm font-bold text-slate-800 dark:text-white">Warehouse Admin</div>
+                                    <div className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">admin@nexwms.com</div>
                                 </div>
                                 <div className="p-1">
                                     <button 
@@ -1599,18 +1636,18 @@ export default function App() {
                                             window.history.pushState({}, '', '/mobile');
                                             setIsMobileMode(true);
                                         }}
-                                        className="w-full px-3 py-2 text-left text-sm hover:bg-blue-50 text-slate-700 rounded-lg flex items-center gap-3 transition-colors"
+                                        className="w-full px-3 py-2 text-left text-sm hover:bg-blue-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-lg flex items-center gap-3 transition-colors"
                                     >
-                                        <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center"><QrCode size={16}/></div>
+                                        <div className="w-8 h-8 rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 flex items-center justify-center"><QrCode size={16}/></div>
                                         <div>
                                             <div className="font-bold">Mobile Scanner</div>
                                             <div className="text-[10px] text-slate-400">Switch to handheld view</div>
                                         </div>
                                     </button>
                                 </div>
-                                <div className="h-px bg-black/5 my-1 mx-2" />
+                                <div className="h-px bg-black/5 dark:bg-white/10 my-1 mx-2" />
                                 <div className="p-1">
-                                    <button onClick={handleLogout} className="w-full px-3 py-2 text-left text-sm hover:bg-red-50 text-red-600 rounded-lg flex items-center gap-2 transition-colors font-medium">
+                                    <button onClick={handleLogout} className="w-full px-3 py-2 text-left text-sm hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg flex items-center gap-2 transition-colors font-medium">
                                         <LogOut size={16}/> Sign Out
                                     </button>
                                 </div>
@@ -1627,13 +1664,13 @@ export default function App() {
                 <PackingStationUI order={packingOrder} onBack={() => setPackingOrder(null)} onComplete={() => { setPackingOrder(null); fetchAll(); }} onPrint={(zpl) => { setCurrentZpl(zpl); setShowLabel(true); }} />
             ) : activeTab === 'Packing' && !packingOrder ? (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    <h2 className="text-2xl font-bold text-slate-800 mb-6">Packing Queue</h2>
+                    <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-6">Packing Queue</h2>
                     <div className="grid grid-cols-3 gap-6">
                         {orders.filter(o => o.status === 'PICKED').length === 0 && (<div className="col-span-3 text-center py-20 text-slate-400"><PackageCheck size={64} className="mx-auto mb-4 opacity-50"/><div>No orders ready for packing.</div></div>)}
                         {orders.filter(o => o.status === 'PICKED').map(o => (
                             <GlassCard key={o.id} className="group hover:scale-[1.02] transition-transform cursor-pointer" >
-                                <div className="flex justify-between items-start mb-4"><div className="font-bold text-lg text-slate-700">{o.order_number}</div><div className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold">READY</div></div>
-                                <div className="text-sm text-slate-500 mb-4">{o.customer_name}<br/>{o.customer_city || 'Unknown City'}</div>
+                                <div className="flex justify-between items-start mb-4"><div className="font-bold text-lg text-slate-700 dark:text-slate-200">{o.order_number}</div><div className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold">READY</div></div>
+                                <div className="text-sm text-slate-500 dark:text-slate-400 mb-4">{o.customer_name}<br/>{o.customer_city || 'Unknown City'}</div>
                                 <button onClick={() => setPackingOrder(o)} className="w-full bg-purple-600 text-white font-bold py-2 rounded-lg shadow-md hover:bg-purple-700 transition-colors">Start Packing</button>
                             </GlassCard>
                         ))}
@@ -1645,12 +1682,12 @@ export default function App() {
                 <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4">
                     <div className="flex justify-between items-center mb-6">
                         <div>
-                            <h2 className="text-2xl font-bold text-slate-800">Wave Planning</h2>
-                            <p className="text-slate-500 text-sm">Group allocated orders into optimized pick paths.</p>
+                            <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Wave Planning</h2>
+                            <p className="text-slate-500 dark:text-slate-400 text-sm">Group allocated orders into optimized pick paths.</p>
                         </div>
                         {activeWave ? (
                             <div className="flex gap-2">
-                                <button onClick={() => setActiveWave(null)} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-lg transition-colors">Discard</button>
+                                <button onClick={() => setActiveWave(null)} className="px-4 py-2 text-slate-500 dark:text-slate-400 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors">Discard</button>
                                 <button onClick={() => setScannerMode('WAVE')} className="bg-blue-600 text-white px-6 py-2 rounded-lg shadow-lg font-bold flex items-center gap-2 animate-pulse hover:bg-blue-700 transition-all">
                                     <Play size={18} /> Start Picking
                                 </button>
@@ -1670,13 +1707,13 @@ export default function App() {
                         {/* Left Column: Order Selection */}
                         <div className="col-span-5 flex flex-col gap-4 h-[600px]">
                             <div className="flex justify-between items-center">
-                                <div className="font-bold text-slate-600 text-sm uppercase tracking-wider">Ready for Picking</div>
+                                <div className="font-bold text-slate-600 dark:text-slate-400 text-sm uppercase tracking-wider">Ready for Picking</div>
                                 <div className="text-xs text-slate-400">{orders.filter(o => o.status === 'ALLOCATED').length} Orders</div>
                             </div>
                             
                             <div className="flex-1 overflow-y-auto space-y-3 pr-2 scroll-smooth macos-scrollbar">
                                 {orders.filter(o => o.status === 'ALLOCATED').length === 0 && (
-                                    <div className="text-center py-10 text-slate-400 italic border-2 border-dashed border-slate-200 rounded-xl">
+                                    <div className="text-center py-10 text-slate-400 italic border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl">
                                         <PackageCheck size={48} className="mx-auto mb-2 opacity-20"/>
                                         No allocated orders found.<br/>
                                         <span className="text-xs">Go to "Orders" and click Allocate.</span>
@@ -1688,18 +1725,18 @@ export default function App() {
                                         <div 
                                             key={order.id}
                                             onClick={() => !activeWave && setSelectedOrders(prev => isSelected ? prev.filter(id => id !== order.id) : [...prev, order.id])}
-                                            className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 ${isSelected ? 'border-indigo-500 bg-indigo-50 shadow-md' : 'border-white bg-white/60 hover:border-indigo-200 hover:bg-white'} ${activeWave ? 'opacity-50 pointer-events-none' : ''}`}
+                                            className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 ${isSelected ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 shadow-md' : 'border-white dark:border-transparent bg-white/60 dark:bg-slate-800/60 hover:border-indigo-200 dark:hover:border-indigo-800 hover:bg-white dark:hover:bg-slate-800'} ${activeWave ? 'opacity-50 pointer-events-none' : ''}`}
                                         >
                                             <div className="flex justify-between items-start">
                                                 <div>
-                                                    <div className={`font-bold ${isSelected ? 'text-indigo-700' : 'text-slate-700'}`}>{order.order_number}</div>
-                                                    <div className="text-xs text-slate-500">{order.customer_name}</div>
+                                                    <div className={`font-bold ${isSelected ? 'text-indigo-700 dark:text-indigo-300' : 'text-slate-700 dark:text-slate-200'}`}>{order.order_number}</div>
+                                                    <div className="text-xs text-slate-500 dark:text-slate-400">{order.customer_name}</div>
                                                 </div>
-                                                {isSelected ? <CheckCircle2 size={20} className="text-indigo-600 fill-indigo-100"/> : <div className="w-5 h-5 rounded-full border-2 border-slate-300"/>}
+                                                {isSelected ? <CheckCircle2 size={20} className="text-indigo-600 dark:text-indigo-400 fill-indigo-100 dark:fill-indigo-900"/> : <div className="w-5 h-5 rounded-full border-2 border-slate-300 dark:border-slate-600"/>}
                                             </div>
-                                            <div className="mt-3 pt-3 border-t border-black/5 flex justify-between items-center text-xs">
-                                                <span className="font-mono text-slate-500">{new Date(order.created_at).toLocaleDateString()}</span>
-                                                <span className="font-bold bg-white px-2 py-1 rounded border border-slate-200">{order.lines.length} Items</span>
+                                            <div className="mt-3 pt-3 border-t border-black/5 dark:border-white/10 flex justify-between items-center text-xs">
+                                                <span className="font-mono text-slate-500 dark:text-slate-400">{new Date(order.created_at).toLocaleDateString()}</span>
+                                                <span className="font-bold bg-white dark:bg-slate-900 px-2 py-1 rounded border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">{order.lines.length} Items</span>
                                             </div>
                                         </div>
                                     )
@@ -1715,32 +1752,32 @@ export default function App() {
                                     <div className="flex justify-between items-center mb-6">
                                         <div>
                                             <div className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1">Active Wave Plan</div>
-                                            <div className="text-4xl font-mono font-bold text-slate-800 tracking-tight">{activeWave.wave_id}</div>
+                                            <div className="text-4xl font-mono font-bold text-slate-800 dark:text-white tracking-tight">{activeWave.wave_id}</div>
                                         </div>
-                                        <div className="text-right bg-slate-50 px-4 py-2 rounded-xl border border-slate-100">
-                                            <div className="text-3xl font-bold text-slate-700">{activeWave.pick_list.length}</div>
+                                        <div className="text-right bg-slate-50 dark:bg-slate-800 px-4 py-2 rounded-xl border border-slate-100 dark:border-slate-700">
+                                            <div className="text-3xl font-bold text-slate-700 dark:text-white">{activeWave.pick_list.length}</div>
                                             <div className="text-[10px] font-bold text-slate-400 uppercase">Total Tasks</div>
                                         </div>
                                     </div>
                                     
-                                    <div className="flex-1 overflow-y-auto bg-slate-50/50 rounded-xl border border-slate-100 p-2 space-y-2 macos-scrollbar">
+                                    <div className="flex-1 overflow-y-auto bg-slate-50/50 dark:bg-slate-900/50 rounded-xl border border-slate-100 dark:border-slate-700 p-2 space-y-2 macos-scrollbar">
                                         {activeWave.pick_list.map((task: any, idx: number) => (
-                                            <div key={idx} className="bg-white p-4 rounded-lg border border-slate-200 flex justify-between items-center shadow-sm hover:shadow-md transition-shadow">
+                                            <div key={idx} className="bg-white dark:bg-slate-800 p-4 rounded-lg border border-slate-200 dark:border-slate-700 flex justify-between items-center shadow-sm hover:shadow-md transition-shadow">
                                                 <div className="flex items-center gap-4">
-                                                    <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-xs font-mono">{idx + 1}</div>
+                                                    <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-300 flex items-center justify-center font-bold text-xs font-mono">{idx + 1}</div>
                                                     <div>
                                                         <div className="flex items-center gap-2">
-                                                            <span className="font-bold text-lg text-slate-700">{task.sku}</span>
+                                                            <span className="font-bold text-lg text-slate-700 dark:text-white">{task.sku}</span>
                                                             {task.status === 'PICKED' && <CheckCircle2 size={14} className="text-green-500"/>}
                                                         </div>
-                                                        <div className="flex items-center gap-1 text-xs text-slate-500 font-mono bg-yellow-50 px-1.5 py-0.5 rounded w-fit border border-yellow-100">
+                                                        <div className="flex items-center gap-1 text-xs text-slate-500 font-mono bg-yellow-50 dark:bg-yellow-900/20 px-1.5 py-0.5 rounded w-fit border border-yellow-100 dark:border-yellow-800 dark:text-yellow-200">
                                                             <MapPin size={10}/> {task.location}
                                                         </div>
                                                     </div>
                                                 </div>
                                                 <div className="text-right">
-                                                    <div className="font-bold text-xl text-slate-800">x{task.total_qty}</div>
-                                                    <div className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${task.status === 'PICKED' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400'}`}>
+                                                    <div className="font-bold text-xl text-slate-800 dark:text-white">x{task.total_qty}</div>
+                                                    <div className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${task.status === 'PICKED' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-400'}`}>
                                                         {task.status || 'PENDING'}
                                                     </div>
                                                 </div>
@@ -1749,12 +1786,12 @@ export default function App() {
                                     </div>
                                 </GlassCard>
                             ) : (
-                                <div className="h-full border-2 border-dashed border-slate-300 rounded-3xl flex flex-col items-center justify-center text-slate-400 gap-6 bg-slate-50/50">
-                                    <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center shadow-sm">
-                                        <Layers size={40} className="text-indigo-200"/>
+                                <div className="h-full border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-3xl flex flex-col items-center justify-center text-slate-400 gap-6 bg-slate-50/50 dark:bg-slate-900/50">
+                                    <div className="w-24 h-24 bg-white dark:bg-slate-800 rounded-full flex items-center justify-center shadow-sm">
+                                        <Layers size={40} className="text-indigo-200 dark:text-indigo-800"/>
                                     </div>
                                     <div className="text-center">
-                                        <h3 className="font-bold text-slate-600 text-lg">No Wave Generated</h3>
+                                        <h3 className="font-bold text-slate-600 dark:text-slate-300 text-lg">No Wave Generated</h3>
                                         <p className="text-sm max-w-xs mx-auto mt-1">Select allocated orders from the left to generate an optimized picking path.</p>
                                     </div>
                                 </div>
@@ -1767,19 +1804,19 @@ export default function App() {
             {activeTab === 'Moves' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
                     <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-2xl font-bold text-slate-800">Internal Moves</h2>
+                        <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Internal Moves</h2>
                         <button onClick={()=>setScannerMode('MOVE')} className="bg-blue-600 text-white px-6 py-2 rounded-lg shadow-lg font-bold flex items-center gap-2"><ArrowRightLeft size={18}/> Start Transfer</button>
                     </div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">Time</th><th className="p-4">Item</th><th className="p-4">From/To</th><th className="p-4 text-right">Qty</th></tr></thead>
-                            <tbody className="divide-y divide-black/5">
+                            <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10"><tr><th className="p-4">Time</th><th className="p-4">Item</th><th className="p-4">From/To</th><th className="p-4 text-right">Qty</th></tr></thead>
+                            <tbody className="divide-y divide-black/5 dark:divide-white/10">
                                 {history.filter(h=>h.action==='MOVE').map(h => (
-                                    <tr key={h.id} className="hover:bg-blue-50/20 transition-colors">
-                                        <td className="p-4 font-mono text-xs text-slate-500">{new Date(h.timestamp).toLocaleString()}</td>
-                                        <td className="p-4 font-medium">{h.sku_snapshot}</td>
-                                        <td className="p-4 font-mono text-xs">{h.location_snapshot}</td>
-                                        <td className="p-4 text-right font-bold">{h.quantity_change}</td>
+                                    <tr key={h.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
+                                        <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{new Date(h.timestamp).toLocaleString()}</td>
+                                        <td className="p-4 font-medium text-slate-700 dark:text-slate-200">{h.sku_snapshot}</td>
+                                        <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-300">{h.location_snapshot}</td>
+                                        <td className="p-4 text-right font-bold text-slate-700 dark:text-white">{h.quantity_change}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -1792,23 +1829,23 @@ export default function App() {
                 <div className="max-w-6xl mx-auto grid grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4">
                     <div className="col-span-2 space-y-6">
                         <div className="flex justify-between items-center">
-                            <div><h2 className="text-2xl font-bold text-slate-800">Replenishment Tasks</h2><p className="text-slate-500 text-sm">Moves required to refill pick faces.</p></div>
+                            <div><h2 className="text-2xl font-bold text-slate-800 dark:text-white">Replenishment Tasks</h2><p className="text-slate-500 dark:text-slate-400 text-sm">Moves required to refill pick faces.</p></div>
                             <div className="flex gap-2">
-                                <button onClick={handleGenerateReplenish} className="bg-blue-100 text-blue-700 px-4 py-2 rounded-lg font-bold text-sm hover:bg-blue-200">Run Analysis</button>
+                                <button onClick={handleGenerateReplenish} className="bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-4 py-2 rounded-lg font-bold text-sm hover:bg-blue-200 dark:hover:bg-blue-900/60">Run Analysis</button>
                                 <button onClick={()=>setScannerMode('REPLENISH')} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-lg flex items-center gap-2"><Play size={16}/> Start Job</button>
                             </div>
                         </div>
                         <GlassCard noPad className="overflow-hidden">
                             <table className="w-full text-left text-sm">
-                                <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">Status</th><th className="p-4">Item</th><th className="p-4">From (Reserve)</th><th className="p-4">To (Pick)</th><th className="p-4 text-right">Qty</th></tr></thead>
-                                <tbody className="divide-y divide-black/5">
+                                <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10"><tr><th className="p-4">Status</th><th className="p-4">Item</th><th className="p-4">From (Reserve)</th><th className="p-4">To (Pick)</th><th className="p-4 text-right">Qty</th></tr></thead>
+                                <tbody className="divide-y divide-black/5 dark:divide-white/10">
                                     {replenishTasks.map(t => (
-                                        <tr key={t.id} className="hover:bg-blue-50/20 transition-colors">
+                                        <tr key={t.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
                                             <td className="p-4"><StatusBadge status={t.status}/></td>
-                                            <td className="p-4 font-bold text-slate-700">{t.item_sku}</td>
-                                            <td className="p-4 font-mono text-slate-500">{t.source_location}</td>
-                                            <td className="p-4 font-mono text-blue-600 font-bold">{t.dest_location}</td>
-                                            <td className="p-4 text-right font-bold">{t.qty_to_move}</td>
+                                            <td className="p-4 font-bold text-slate-700 dark:text-slate-200">{t.item_sku}</td>
+                                            <td className="p-4 font-mono text-slate-500 dark:text-slate-400">{t.source_location}</td>
+                                            <td className="p-4 font-mono text-blue-600 dark:text-blue-400 font-bold">{t.dest_location}</td>
+                                            <td className="p-4 text-right font-bold text-slate-700 dark:text-white">{t.qty_to_move}</td>
                                         </tr>
                                     ))}
                                     {replenishTasks.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-slate-400">No active tasks. Run analysis to check levels.</td></tr>}
@@ -1817,12 +1854,12 @@ export default function App() {
                         </GlassCard>
                     </div>
                     <div className="space-y-6">
-                        <h3 className="font-bold text-slate-700 flex items-center gap-2"><Settings2 size={18}/> Pick Face Rules</h3>
+                        <h3 className="font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><Settings2 size={18}/> Pick Face Rules</h3>
                         <GlassCard className="p-4 space-y-4">
                             <form onSubmit={handleAddRule} className="space-y-3">
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase">Location</label>
-                                    <select name="loc" className="w-full p-2 rounded border border-slate-200 text-sm mt-1" required>
+                                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Location</label>
+                                    <select name="loc" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required>
                                         <option value="">Select Bin...</option>
                                         {locations.filter(l => l.location_type === 'PICK').map(l => (
                                             <option key={l.id} value={l.location_code}>{l.location_code} ({l.zone})</option>
@@ -1830,30 +1867,30 @@ export default function App() {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="text-[10px] font-bold text-slate-500 uppercase">Item</label>
-                                    <select name="item" className="w-full p-2 rounded border border-slate-200 text-sm mt-1" required>
+                                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Item</label>
+                                    <select name="item" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required>
                                         <option value="">Select SKU...</option>
                                         {items.map(i=><option key={i.id} value={i.id}>{i.sku}</option>)}
                                     </select>
                                 </div>
                                 <div className="flex gap-2">
                                     <div className="w-1/2">
-                                        <label className="text-[10px] font-bold text-slate-500 uppercase">Min</label>
-                                        <input name="min" type="number" placeholder="Min" className="w-full p-2 rounded border border-slate-200 text-sm mt-1" required/>
+                                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Min</label>
+                                        <input name="min" type="number" placeholder="Min" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required/>
                                     </div>
                                     <div className="w-1/2">
-                                        <label className="text-[10px] font-bold text-slate-500 uppercase">Max</label>
-                                        <input name="max" type="number" placeholder="Max" className="w-full p-2 rounded border border-slate-200 text-sm mt-1" required/>
+                                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Max</label>
+                                        <input name="max" type="number" placeholder="Max" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required/>
                                     </div>
                                 </div>
-                                <button className="w-full bg-slate-800 text-white py-2 rounded-lg font-bold text-sm">Add Rule</button>
+                                <button className="w-full bg-slate-800 dark:bg-white dark:text-slate-900 text-white py-2 rounded-lg font-bold text-sm">Add Rule</button>
                             </form>
-                            <div className="border-t pt-4 space-y-2">
+                            <div className="border-t border-slate-200 dark:border-slate-700 pt-4 space-y-2">
                                 {binConfigs.map(c => (
-                                    <div key={c.id} className="flex justify-between text-xs bg-white/50 p-2 rounded border border-white">
+                                    <div key={c.id} className="flex justify-between text-xs bg-white/50 dark:bg-slate-800/50 p-2 rounded border border-white dark:border-slate-700 text-slate-700 dark:text-slate-300">
                                         <span className="font-mono font-bold">{c.location_code}</span>
                                         <span>{c.item_sku}</span>
-                                        <span className="text-slate-500">{c.min_qty} - {c.max_qty}</span>
+                                        <span className="text-slate-500 dark:text-slate-400">{c.min_qty} - {c.max_qty}</span>
                                     </div>
                                 ))}
                             </div>
@@ -1867,18 +1904,18 @@ export default function App() {
                 <div className="max-w-[1400px] mx-auto h-full flex flex-col animate-in fade-in slide-in-from-bottom-4">
                     <div className="flex justify-between items-center mb-4 shrink-0">
                         <div>
-                            <h2 className="text-2xl font-bold text-slate-800">Warehouse Map</h2>
-                            <p className="text-slate-500 text-sm">Interactive grid view. Click a bin to audit.</p>
+                            <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Warehouse Map</h2>
+                            <p className="text-slate-500 dark:text-slate-400 text-sm">Interactive grid view. Click a bin to audit.</p>
                         </div>
                         
                         <div className="flex gap-2">
                             {/* Zone Filter */}
-                            <div className="flex gap-2 bg-white/50 p-1 rounded-xl border border-white/60 shadow-sm">
+                            <div className="flex gap-2 bg-white/50 dark:bg-slate-800/50 p-1 rounded-xl border border-white/60 dark:border-white/10 shadow-sm">
                                 {['All', ...Array.from(new Set(locations.map(l => l.zone)))].map(z => (
                                     <button 
                                         key={z} 
                                         onClick={() => setActiveZone(z)}
-                                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${activeZone === z ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-white'}`}
+                                        className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${activeZone === z ? 'bg-slate-800 dark:bg-white text-white dark:text-slate-900 shadow-md' : 'text-slate-500 dark:text-slate-400 hover:bg-white dark:hover:bg-slate-700'}`}
                                     >
                                         {z || 'No Zone'}
                                     </button>
@@ -1895,7 +1932,7 @@ export default function App() {
 
                     <div className="flex gap-6 h-full overflow-hidden">
                         {/* The Visual Grid (Reusable Component) */}
-                        <GlassCard noPad className="flex-1 relative bg-slate-50/50 overflow-hidden border-slate-200">
+                        <GlassCard noPad className="flex-1 relative bg-slate-50/50 dark:bg-slate-900/50 overflow-hidden border-slate-200 dark:border-slate-700">
                             <WarehouseMap 
                                 locations={locations}
                                 inventory={inventory}
@@ -1911,49 +1948,49 @@ export default function App() {
                                     <div className="flex justify-between items-start mb-6">
                                         <div>
                                             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Inspector</div>
-                                            <h3 className="text-3xl font-bold text-slate-800 font-mono">{selectedLocation.location_code}</h3>
+                                            <h3 className="text-3xl font-bold text-slate-800 dark:text-white font-mono">{selectedLocation.location_code}</h3>
                                             <div className="flex gap-2 mt-2">
-                                                <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{selectedLocation.location_type}</span>
-                                                <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">{selectedLocation.zone}</span>
+                                                <span className="bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-1 rounded text-xs font-bold border border-slate-200 dark:border-slate-600">{selectedLocation.location_type}</span>
+                                                <span className="bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-2 py-1 rounded text-xs font-bold border border-slate-200 dark:border-slate-600">{selectedLocation.zone}</span>
                                             </div>
                                         </div>
-                                        <button onClick={() => setSelectedLocation(null)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+                                        <button onClick={() => setSelectedLocation(null)} className="text-slate-400 hover:text-slate-600 dark:hover:text-white"><X size={20}/></button>
                                     </div>
 
                                     <div className="flex-1 overflow-y-auto -mx-2 px-2 space-y-2 macos-scrollbar">
                                         <div className="text-xs font-bold text-slate-400 uppercase mb-2">Contents</div>
                                         {inventory.filter(i => i.location_code === selectedLocation.location_code).length === 0 ? (
-                                            <div className="text-center py-8 text-slate-400 italic bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                                            <div className="text-center py-8 text-slate-400 italic bg-slate-50/50 dark:bg-slate-800/50 rounded-xl border border-dashed border-slate-200 dark:border-slate-700">
                                                 Bin is empty
                                             </div>
                                         ) : (
                                             inventory.filter(i => i.location_code === selectedLocation.location_code).map(inv => (
-                                                <div key={inv.id} className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                                                    <div className="font-bold text-slate-700">{inv.item_sku}</div>
-                                                    <div className="text-xs text-slate-500 mb-2">{inv.item_name}</div>
-                                                    <div className="flex justify-between items-center border-t pt-2">
+                                                <div key={inv.id} className="bg-white dark:bg-slate-800 p-3 rounded-xl border border-slate-100 dark:border-slate-700 shadow-sm">
+                                                    <div className="font-bold text-slate-700 dark:text-slate-200">{inv.item_sku}</div>
+                                                    <div className="text-xs text-slate-500 dark:text-slate-400 mb-2">{inv.item_name}</div>
+                                                    <div className="flex justify-between items-center border-t border-slate-100 dark:border-slate-700 pt-2">
                                                         <span className="text-xs text-slate-400">Qty</span>
-                                                        <span className="font-bold text-lg text-blue-600">{inv.quantity}</span>
+                                                        <span className="font-bold text-lg text-blue-600 dark:text-blue-400">{inv.quantity}</span>
                                                     </div>
                                                 </div>
                                             ))
                                         )}
                                     </div>
 
-                                    <div className="mt-6 pt-6 border-t border-slate-200 space-y-3">
+                                    <div className="mt-6 pt-6 border-t border-slate-200 dark:border-slate-700 space-y-3">
                                         <button 
                                             onClick={() => handleReportMissing(selectedLocation.location_code)}
-                                            className="w-full py-3 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded-xl border border-red-200 flex items-center justify-center gap-2 transition-colors"
+                                            className="w-full py-3 bg-red-50 hover:bg-red-100 dark:bg-red-900/20 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 font-bold rounded-xl border border-red-200 dark:border-red-800 flex items-center justify-center gap-2 transition-colors"
                                         >
                                             <AlertCircle size={18}/> Report Missing Item
                                         </button>
-                                        <button className="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-colors">
+                                        <button className="w-full py-3 bg-slate-800 hover:bg-slate-900 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-colors">
                                             <Printer size={18}/> Print Bin Label
                                         </button>
                                     </div>
                                 </GlassCard>
                             ) : (
-                                <div className="h-full border-2 border-dashed border-slate-300/50 rounded-2xl flex flex-col items-center justify-center text-slate-400 gap-4">
+                                <div className="h-full border-2 border-dashed border-slate-300/50 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center text-slate-400 gap-4">
                                     <MapPin size={48} className="opacity-20"/>
                                     <p className="text-sm font-medium">Select a location on the map<br/>to view contents.</p>
                                 </div>
@@ -1969,8 +2006,8 @@ export default function App() {
                     <div className="grid grid-cols-4 gap-6">
                         {[{l:"Total Items",v:stats?.total_stock,i:Package,c:"blue"},{l:"Bin Locations",v:stats?.total_locations,i:LayoutDashboard,c:"purple"},{l:"Restock Needed",v:stats?.low_stock,i:AlertCircle,c:"red"},{l:"Moves Today",v:stats?.recent_moves,i:Activity,c:"emerald"}].map((k,i)=>(
                             <GlassCard key={i} className="flex items-center gap-4 hover:scale-[1.02] transition-transform cursor-default">
-                                <div className={`w-12 h-12 rounded-full bg-${k.c}-100 flex items-center justify-center text-${k.c}-600`}><k.i/></div>
-                                <div><div className="text-3xl font-bold">{k.v}</div><div className="text-xs font-bold text-slate-400 uppercase">{k.l}</div></div>
+                                <div className={`w-12 h-12 rounded-full bg-${k.c}-100 dark:bg-${k.c}-900/30 flex items-center justify-center text-${k.c}-600 dark:text-${k.c}-400`}><k.i/></div>
+                                <div><div className="text-3xl font-bold text-slate-800 dark:text-white">{k.v}</div><div className="text-xs font-bold text-slate-400 uppercase">{k.l}</div></div>
                             </GlassCard>
                         ))}
                     </div>
@@ -1978,22 +2015,22 @@ export default function App() {
                     <div className="grid grid-cols-3 gap-6">
                         {/* Recent Activity Feed */}
                         <GlassCard className="col-span-2 min-h-[300px]" noPad>
-                            <div className="p-4 border-b border-black/5 font-bold text-slate-600 text-sm flex justify-between items-center">
+                            <div className="p-4 border-b border-black/5 dark:border-white/10 font-bold text-slate-600 dark:text-slate-300 text-sm flex justify-between items-center">
                                 <div className="flex items-center gap-2"><History size={16}/> Recent Activity</div>
-                                <button onClick={() => navigate('History')} className="text-xs bg-slate-200 hover:bg-slate-300 px-2 py-1 rounded text-slate-600 transition-colors flex items-center gap-1">Full History <ArrowRightCircle size={12}/></button>
+                                <button onClick={() => navigate('History')} className="text-xs bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 px-2 py-1 rounded text-slate-600 dark:text-slate-300 transition-colors flex items-center gap-1">Full History <ArrowRightCircle size={12}/></button>
                             </div>
-                            <div className="divide-y divide-black/5 max-h-[300px] overflow-y-auto macos-scrollbar">
+                            <div className="divide-y divide-black/5 dark:divide-white/10 max-h-[300px] overflow-y-auto macos-scrollbar">
                                 {history.slice(0, 6).map(h => (
-                                    <div key={h.id} className="p-3 px-4 flex justify-between items-center text-sm hover:bg-white/40 transition-colors">
+                                    <div key={h.id} className="p-3 px-4 flex justify-between items-center text-sm hover:bg-white/40 dark:hover:bg-white/5 transition-colors">
                                         <div className="flex items-center gap-3">
                                             <span className={`w-2 h-2 rounded-full ${h.action==='PICK'?'bg-purple-500': h.action==='RECEIVE'?'bg-blue-500':'bg-orange-500'}`}/>
-                                            <span className="font-medium text-slate-700">{h.action}</span>
+                                            <span className="font-medium text-slate-700 dark:text-slate-200">{h.action}</span>
                                             <span className="text-slate-400">·</span>
-                                            <span className="font-mono text-slate-600">{h.sku_snapshot}</span>
+                                            <span className="font-mono text-slate-600 dark:text-slate-300">{h.sku_snapshot}</span>
                                         </div>
-                                        <div className="flex gap-4 text-slate-500 font-mono text-xs">
+                                        <div className="flex gap-4 text-slate-500 dark:text-slate-400 font-mono text-xs">
                                             <span>{h.location_snapshot}</span>
-                                            <span className={h.quantity_change < 0 ? 'text-red-500' : 'text-green-600'}>{h.quantity_change > 0 ? '+' : ''}{h.quantity_change}</span>
+                                            <span className={h.quantity_change < 0 ? 'text-red-500 dark:text-red-400' : 'text-green-600 dark:text-green-400'}>{h.quantity_change > 0 ? '+' : ''}{h.quantity_change}</span>
                                         </div>
                                     </div>
                                 ))}
@@ -2003,18 +2040,18 @@ export default function App() {
                         {/* Velocity Heatmap Widget */}
                         <div className="space-y-4">
                              <GlassCard className="h-full flex flex-col" noPad>
-                                <div className="p-4 border-b border-black/5 font-bold text-slate-600 text-sm flex items-center gap-2"><Activity size={16}/> High Velocity Bins</div>
+                                <div className="p-4 border-b border-black/5 dark:border-white/10 font-bold text-slate-600 dark:text-slate-300 text-sm flex items-center gap-2"><Activity size={16}/> High Velocity Bins</div>
                                 <div className="flex-1 p-4 space-y-3 overflow-y-auto max-h-[240px] macos-scrollbar">
                                     {stats?.heatmap && stats.heatmap.length > 0 ? (
                                         stats.heatmap.map((bin, idx) => (
                                             <div key={bin.location_snapshot} className="flex items-center gap-3">
-                                                <div className="w-6 h-6 rounded bg-slate-100 text-[10px] font-bold flex items-center justify-center text-slate-500">{idx + 1}</div>
+                                                <div className="w-6 h-6 rounded bg-slate-100 dark:bg-slate-700 text-[10px] font-bold flex items-center justify-center text-slate-500 dark:text-slate-300">{idx + 1}</div>
                                                 <div className="flex-1">
                                                     <div className="flex justify-between text-xs mb-1">
-                                                        <span className="font-bold text-slate-700 font-mono">{bin.location_snapshot}</span>
+                                                        <span className="font-bold text-slate-700 dark:text-slate-200 font-mono">{bin.location_snapshot}</span>
                                                         <span className="text-slate-400">{bin.activity} moves</span>
                                                     </div>
-                                                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                                    <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
                                                         <div className="h-full bg-gradient-to-r from-blue-400 to-purple-500" style={{width: `${Math.min(100, (bin.activity / (stats.heatmap?.[0]?.activity || 1)) * 100)}%`}}></div>
                                                     </div>
                                                 </div>
@@ -2026,8 +2063,8 @@ export default function App() {
                                 </div>
                              </GlassCard>
                              
-                             <button onClick={()=>navigate('Inventory')} className="w-full bg-white/50 border border-white/40 p-3 rounded-2xl hover:bg-white/80 transition-all text-left flex items-center justify-between group">
-                                <div><div className="font-bold text-slate-700 text-sm">Lookup Item</div><div className="text-[10px] text-slate-500">Check stock & locations</div></div>
+                             <button onClick={()=>navigate('Inventory')} className="w-full bg-white/50 dark:bg-slate-800/50 border border-white/40 dark:border-white/10 p-3 rounded-2xl hover:bg-white/80 dark:hover:bg-slate-800/80 transition-all text-left flex items-center justify-between group">
+                                <div><div className="font-bold text-slate-700 dark:text-slate-200 text-sm">Lookup Item</div><div className="text-[10px] text-slate-500 dark:text-slate-400">Check stock & locations</div></div>
                                 <Search className="text-slate-400 group-hover:text-blue-500 transition-colors" size={18}/>
                              </button>
                         </div>
@@ -2037,19 +2074,19 @@ export default function App() {
 
             {activeTab === 'Orders' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800">Sales Orders</h2><button onClick={() => setShowOrderModal(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2"><Plus size={16}/> New Order</button></div>
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800 dark:text-white">Sales Orders</h2><button onClick={() => setShowOrderModal(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2"><Plus size={16}/> New Order</button></div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">Order #</th><th className="p-4">Customer</th><th className="p-4">Status</th><th className="p-4 text-right">Items</th><th className="p-4 text-right">Actions</th></tr></thead>
-                            <tbody className="divide-y divide-black/5">
+                            <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10"><tr><th className="p-4">Order #</th><th className="p-4">Customer</th><th className="p-4">Status</th><th className="p-4 text-right">Items</th><th className="p-4 text-right">Actions</th></tr></thead>
+                            <tbody className="divide-y divide-black/5 dark:divide-white/10">
                                 {orders.map(o => (
-                                    <tr key={o.id} className="hover:bg-blue-50/20 transition-colors">
-                                        <td className="p-4 font-bold text-slate-700">{o.order_number}</td><td className="p-4">{o.customer_name}</td><td className="p-4"><StatusBadge status={o.status}/></td><td className="p-4 text-right font-mono text-slate-500">{o.lines.length}</td>
+                                    <tr key={o.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
+                                        <td className="p-4 font-bold text-slate-700 dark:text-slate-200">{o.order_number}</td><td className="p-4 text-slate-700 dark:text-slate-300">{o.customer_name}</td><td className="p-4"><StatusBadge status={o.status}/></td><td className="p-4 text-right font-mono text-slate-500 dark:text-slate-400">{o.lines.length}</td>
                                         <td className="p-4 text-right space-x-2">
                                             {o.status === 'PENDING' && <button onClick={()=>handleOrderAction(o.id, 'allocate')} className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">Allocate</button>}
                                             {o.status === 'PICKED' && <button onClick={()=>navigate('Packing')} className="text-xs bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">Pack</button>}
                                             {o.status === 'PACKED' && <button onClick={()=>handleOrderAction(o.id, 'ship')} className="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700">Ship</button>}
-                                            {o.status === 'SHIPPED' && <button onClick={()=>handleGenerateLabel(o.id)} className="text-xs bg-slate-800 text-white px-3 py-1 rounded hover:bg-black">Label</button>}
+                                            {o.status === 'SHIPPED' && <button onClick={()=>handleGenerateLabel(o.id)} className="text-xs bg-slate-800 dark:bg-slate-700 text-white px-3 py-1 rounded hover:bg-black dark:hover:bg-slate-900">Label</button>}
                                         </td>
                                     </tr>
                                 ))}
@@ -2061,12 +2098,12 @@ export default function App() {
 
             {activeTab === 'Receiving' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800">Inbound Receiving</h2><button onClick={handleAutoReplenish} className="bg-slate-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2"><RefreshCw size={16}/> Auto-Replenish</button></div>
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800 dark:text-white">Inbound Receiving</h2><button onClick={handleAutoReplenish} className="bg-slate-700 dark:bg-slate-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2"><RefreshCw size={16}/> Auto-Replenish</button></div>
                     <div className="grid grid-cols-2 gap-6">
                         {pos.map(p => (
                             <GlassCard key={p.id} className="hover:scale-[1.01] transition-transform">
-                                <div className="flex justify-between items-start mb-4"><div><div className="font-bold text-lg text-slate-700">{p.po_number}</div><div className="text-xs text-slate-500">{p.supplier_name}</div></div><StatusBadge status={p.status}/></div>
-                                <div className="space-y-2 mb-6"><div className="flex justify-between text-xs font-bold text-slate-500 uppercase"><span>Progress</span><span>{Math.round((p.lines.reduce((a,b)=>a+(b.received||0),0) / p.lines.reduce((a,b)=>a+b.qty,0)) * 100) || 0}%</span></div><div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-blue-500 transition-all duration-500" style={{width: `${(p.lines.reduce((a,b)=>a+(b.received||0),0) / p.lines.reduce((a,b)=>a+b.qty,0)) * 100}%`}}></div></div></div>
+                                <div className="flex justify-between items-start mb-4"><div><div className="font-bold text-lg text-slate-700 dark:text-white">{p.po_number}</div><div className="text-xs text-slate-500 dark:text-slate-400">{p.supplier_name}</div></div><StatusBadge status={p.status}/></div>
+                                <div className="space-y-2 mb-6"><div className="flex justify-between text-xs font-bold text-slate-500 dark:text-slate-400 uppercase"><span>Progress</span><span>{Math.round((p.lines.reduce((a,b)=>a+(b.received||0),0) / p.lines.reduce((a,b)=>a+b.qty,0)) * 100) || 0}%</span></div><div className="h-2 w-full bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-blue-500 transition-all duration-500" style={{width: `${(p.lines.reduce((a,b)=>a+(b.received||0),0) / p.lines.reduce((a,b)=>a+b.qty,0)) * 100}%`}}></div></div></div>
                                 {p.status !== 'RECEIVED' && <button onClick={()=>{setActivePO(p); setScannerMode('RECEIVE')}} className="w-full bg-blue-600 text-white font-bold py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"><Scan size={16}/> Start Receiving</button>}
                             </GlassCard>
                         ))}
@@ -2076,14 +2113,14 @@ export default function App() {
 
             {activeTab === 'Returns' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800">Returns (RMA)</h2><button onClick={() => setShowRMAModal(true)} className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-red-600 transition-all flex items-center gap-2"><RotateCcw size={16}/> New Return</button></div>
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800 dark:text-white">Returns (RMA)</h2><button onClick={() => setShowRMAModal(true)} className="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-red-600 transition-all flex items-center gap-2"><RotateCcw size={16}/> New Return</button></div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">RMA #</th><th className="p-4">Original Order</th><th className="p-4">Customer</th><th className="p-4">Status</th><th className="p-4 text-right">Actions</th></tr></thead>
-                            <tbody className="divide-y divide-black/5">
+                            <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10"><tr><th className="p-4">RMA #</th><th className="p-4">Original Order</th><th className="p-4">Customer</th><th className="p-4">Status</th><th className="p-4 text-right">Actions</th></tr></thead>
+                            <tbody className="divide-y divide-black/5 dark:divide-white/10">
                                 {rmas.map(r => (
-                                    <tr key={r.id} className="hover:bg-red-50/20 transition-colors">
-                                        <td className="p-4 font-bold text-slate-700">{r.rma_number}</td><td className="p-4 font-mono text-xs">{r.order_number}</td><td className="p-4">{r.customer}</td><td className="p-4"><StatusBadge status={r.status}/></td><td className="p-4 text-right">{r.status === 'REQUESTED' && <button onClick={()=>handleReceiveRMA(r.id)} className="text-xs bg-slate-800 text-white px-3 py-1 rounded hover:bg-black">Receive</button>}</td>
+                                    <tr key={r.id} className="hover:bg-red-50/20 dark:hover:bg-red-900/20 transition-colors">
+                                        <td className="p-4 font-bold text-slate-700 dark:text-slate-200">{r.rma_number}</td><td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-300">{r.order_number}</td><td className="p-4 text-slate-700 dark:text-slate-300">{r.customer}</td><td className="p-4"><StatusBadge status={r.status}/></td><td className="p-4 text-right">{r.status === 'REQUESTED' && <button onClick={()=>handleReceiveRMA(r.id)} className="text-xs bg-slate-800 dark:bg-slate-700 text-white px-3 py-1 rounded hover:bg-black">Receive</button>}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -2094,18 +2131,18 @@ export default function App() {
 
             {activeTab === 'History' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    <h2 className="text-2xl font-bold text-slate-800 mb-6">Transaction History</h2>
+                    <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-6">Transaction History</h2>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5"><tr><th className="p-4">Time</th><th className="p-4">Action</th><th className="p-4">SKU</th><th className="p-4">Location</th><th className="p-4 text-right">Change</th></tr></thead>
-                            <tbody className="divide-y divide-black/5">
+                            <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10"><tr><th className="p-4">Time</th><th className="p-4">Action</th><th className="p-4">SKU</th><th className="p-4">Location</th><th className="p-4 text-right">Change</th></tr></thead>
+                            <tbody className="divide-y divide-black/5 dark:divide-white/10">
                                 {history.map(h => (
-                                    <tr key={h.id} className="hover:bg-blue-50/20 transition-colors">
-                                        <td className="p-4 font-mono text-xs text-slate-500">{new Date(h.timestamp).toLocaleString()}</td>
-                                        <td className="p-4"><span className="font-bold text-[10px] uppercase tracking-wider bg-slate-100 px-2 py-1 rounded text-slate-600">{h.action}</span></td>
-                                        <td className="p-4 font-medium">{h.sku_snapshot}</td>
-                                        <td className="p-4 font-mono text-xs">{h.location_snapshot}</td>
-                                        <td className={`p-4 text-right font-bold ${h.quantity_change > 0 ? 'text-green-600' : h.quantity_change < 0 ? 'text-red-500' : 'text-slate-400'}`}>{h.quantity_change > 0 ? '+' : ''}{h.quantity_change}</td>
+                                    <tr key={h.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
+                                        <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{new Date(h.timestamp).toLocaleString()}</td>
+                                        <td className="p-4"><span className="font-bold text-[10px] uppercase tracking-wider bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-slate-600 dark:text-slate-300">{h.action}</span></td>
+                                        <td className="p-4 font-medium text-slate-700 dark:text-slate-200">{h.sku_snapshot}</td>
+                                        <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-300">{h.location_snapshot}</td>
+                                        <td className={`p-4 text-right font-bold ${h.quantity_change > 0 ? 'text-green-600 dark:text-green-400' : h.quantity_change < 0 ? 'text-red-500 dark:text-red-400' : 'text-slate-400'}`}>{h.quantity_change > 0 ? '+' : ''}{h.quantity_change}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -2117,7 +2154,7 @@ export default function App() {
             {activeTab === 'Inventory' && (
                 <div className="max-w-6xl mx-auto">
                     <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-2xl font-bold text-slate-800">Inventory</h2>
+                        <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Inventory</h2>
                         {/* NEW: Quick Receive Button */}
                         <button onClick={()=>setShowQuickReceive(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2">
                             <ArrowDownCircle size={16}/> Quick Receive
@@ -2125,7 +2162,7 @@ export default function App() {
                     </div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50/80 text-[11px] uppercase text-slate-500 font-bold border-b border-black/5">
+                            <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10">
                                 <tr>
                                     <th className="p-4">SKU</th>
                                     <th className="p-4">Location</th>
@@ -2136,24 +2173,24 @@ export default function App() {
                                     <th className="p-4 text-right">Qty</th>
                                 </tr>
                             </thead>
-                            <tbody>
+                            <tbody className="divide-y divide-black/5 dark:divide-white/10">
                                 {inventory.map(i => (
-                                    <tr key={i.id} className="hover:bg-blue-50/20 border-b border-black/5 last:border-0">
-                                        <td className="p-4 font-medium">{i.item_sku}</td>
-                                        <td className="p-4 font-mono text-xs">{i.location_code}</td>
-                                        <td className="p-4 font-mono text-xs text-slate-500">{i.lot_number || '-'}</td>
-                                        <td className="p-4 font-mono text-xs text-slate-500">{i.expiry_date || '-'}</td>
+                                    <tr key={i.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
+                                        <td className="p-4 font-medium text-slate-700 dark:text-slate-200">{i.item_sku}</td>
+                                        <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-300">{i.location_code}</td>
+                                        <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{i.lot_number || '-'}</td>
+                                        <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{i.expiry_date || '-'}</td>
                                         {/* [MODIFIED] Added Status Cell */}
                                         <td className="p-4">
                                             <span className={`px-2 py-1 rounded text-[10px] font-bold border ${
-                                                i.status === 'AVAILABLE' ? 'bg-green-100 text-green-700 border-green-200' :
-                                                i.status === 'DAMAGED' ? 'bg-red-100 text-red-700 border-red-200' :
-                                                'bg-yellow-100 text-yellow-700 border-yellow-200'
+                                                i.status === 'AVAILABLE' ? 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800' :
+                                                i.status === 'DAMAGED' ? 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800' :
+                                                'bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-300 dark:border-yellow-800'
                                             }`}>
                                                 {i.status || 'AVAILABLE'}
                                             </span>
                                         </td>
-                                        <td className="p-4 text-right font-bold text-slate-600">{i.quantity}</td>
+                                        <td className="p-4 text-right font-bold text-slate-600 dark:text-slate-300">{i.quantity}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -2164,16 +2201,16 @@ export default function App() {
 
             {activeTab === 'Scanner' && (
                 <div className="max-w-4xl mx-auto grid grid-cols-2 gap-6">
-                    <button onClick={()=>setScannerMode('MOVE')} className="bg-white/40 border border-white/40 p-8 rounded-2xl flex flex-col items-center gap-4 text-slate-600 hover:bg-white/60 transition-colors">
+                    <button onClick={()=>setScannerMode('MOVE')} className="bg-white/40 dark:bg-slate-800/40 border border-white/40 dark:border-white/10 p-8 rounded-2xl flex flex-col items-center gap-4 text-slate-600 dark:text-slate-300 hover:bg-white/60 dark:hover:bg-slate-800/60 transition-colors">
                         <ArrowRightLeft size={48}/>
                         <div className="font-bold">Internal Transfer</div>
-                        <div className="text-xs text-slate-500">Move items between bins</div>
+                        <div className="text-xs text-slate-500 dark:text-slate-400">Move items between bins</div>
                     </button>
                     <div className="space-y-4">
-                        <h3 className="font-bold text-slate-600 px-1">Cycle Counts</h3>
+                        <h3 className="font-bold text-slate-600 dark:text-slate-300 px-1">Cycle Counts</h3>
                         {counts.map(c => (
-                            <button key={c.id} onClick={()=>{setActiveCount(c); setScannerMode('CYCLE');}} className="w-full bg-white/60 hover:bg-white p-4 rounded-xl flex justify-between items-center shadow-sm hover:shadow-md transition-all">
-                                <div><div className="font-bold text-slate-700 font-mono">{c.reference}</div><StatusBadge status={c.status}/></div><ChevronRight className="text-slate-400"/>
+                            <button key={c.id} onClick={()=>{setActiveCount(c); setScannerMode('CYCLE');}} className="w-full bg-white/60 dark:bg-slate-800/60 hover:bg-white dark:hover:bg-slate-800 p-4 rounded-xl flex justify-between items-center shadow-sm hover:shadow-md transition-all text-slate-700 dark:text-slate-200">
+                                <div><div className="font-bold font-mono">{c.reference}</div><StatusBadge status={c.status}/></div><ChevronRight className="text-slate-400"/>
                             </button>
                         ))}
                     </div>
@@ -2185,7 +2222,7 @@ export default function App() {
         </div>
 
         {/* MacOS Dock */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white/40 backdrop-blur-2xl border border-white/50 rounded-2xl px-4 py-3 shadow-2xl flex items-end gap-2 z-50">
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-white/40 dark:bg-slate-900/40 backdrop-blur-2xl border border-white/50 dark:border-white/10 rounded-2xl px-4 py-3 shadow-2xl flex items-end gap-2 z-50">
              <DockItem icon={LayoutDashboard} label="Overview" active={activeTab==='Overview'} onClick={()=>navigate('Overview')} />
              <DockItem icon={MapIcon} label="Layout" active={activeTab==='Layout'} onClick={()=>navigate('Layout')} />
              <DockItem icon={Box} label="Inventory" active={activeTab==='Inventory'} onClick={()=>navigate('Inventory')} />
@@ -2196,7 +2233,7 @@ export default function App() {
              <DockItem icon={PackageCheck} label="Packing" active={activeTab==='Packing'} onClick={()=>navigate('Packing')} />
              <DockItem icon={ShoppingCart} label="Orders" active={activeTab==='Orders'} onClick={()=>navigate('Orders')} />
              <DockItem icon={RotateCcw} label="Returns" active={activeTab==='Returns'} onClick={()=>navigate('Returns')} />
-             <div className="w-px h-10 bg-black/10 mx-2"></div>
+             <div className="w-px h-10 bg-black/10 dark:bg-white/10 mx-2"></div>
              <DockItem icon={Scan} label="Scanner" active={activeTab==='Scanner'} onClick={()=>navigate('Scanner')} />
              <DockItem icon={QrCode} label="Barcodes" active={activeTab==='Barcodes'} onClick={()=>navigate('Barcodes')} />
         </div>

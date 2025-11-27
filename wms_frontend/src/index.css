@@ -8,11 +8,18 @@
 
 body {
   margin: 0;
-  overflow: hidden; 
-  background: url('https://images.unsplash.com/photo-1621360841013-c768371e93cf?q=80&w=2832&auto=format&fit=crop') no-repeat center center fixed; 
+  overflow: hidden;
+  /* Default Light Mode Background */
+  background: url('https://images.unsplash.com/photo-1621360841013-c768371e93cf?q=80&w=2832&auto=format&fit=crop') no-repeat center center fixed;
   background-size: cover;
+  transition: background 0.5s ease; /* Smooth transition */
 }
 
+/* Dark Mode Override */
+:root.dark body {
+  background-image: none !important;
+  background-color: #020617; /* Very dark slate */
+}
 /* --- UTILITIES --- */
 
 /* Hide Scrollbar but allow scrolling */
