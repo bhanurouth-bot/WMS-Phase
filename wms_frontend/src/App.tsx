@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useScanDetection } from './hooks/useScanDetection';
 import Login from './Login';
 import MobilePicker from './MobilePicker';
+import { parseGS1 } from './utils/gs1'; // Ensure this file exists
 
 // --- API CONFIG ---
 const API_URL = 'http://127.0.0.1:8000/api';
@@ -437,7 +438,7 @@ const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
     )
 }
 
-// --- UNIVERSAL SCANNER (VISUAL + FEFO + LOTS) ---
+// --- UNIVERSAL SCANNER (VISUAL + FEFO + LOTS + GS1) ---
 
 const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack, onUpdate, onException }: any) => {
     // Expanded State Machine: LOC -> LOT_SELECT -> LOT_VERIFY -> QTY
@@ -505,12 +506,27 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
     const totalItems = mode === 'REPLENISH' ? data.length : (data.tasks || data.pick_list || data.lines || []).length;
     const progress = totalItems > 0 ? ((totalItems - pendingItems.length) / totalItems) * 100 : 0;
 
+    // [ENHANCED] GS1-128 Aware Scan Processor
     const processScan = (scannedData: string) => {
-        const val = scannedData.trim().toUpperCase();
-        
-        // --- 1. VALIDATE LOCATION SCAN (Case Insensitive) ---
-        if ((step === 'LOC' || step === 'DEST') && locations) {
-            const isValidLoc = locations.some((l:any) => l.location_code.toUpperCase() === val);
+        let val = scannedData.trim(); // Keep original case for Lot/Serial, but normalize for SKU if needed
+        const valUpper = val.toUpperCase();
+
+        // --- 1. GS1-128 PARSING ---
+        const gs1 = parseGS1(val);
+        let detectedSku = '';
+
+        if (gs1 && gs1.sku) {
+            // If GS1 detected, we override the scanned value with the SKU to find the task
+            detectedSku = gs1.sku.toUpperCase();
+            val = detectedSku; 
+            playSound('success'); // Acknowledgement beep for complex scan
+        } else {
+            detectedSku = valUpper;
+        }
+
+        // --- 2. VALIDATE LOCATION SCAN (Case Insensitive) ---
+        if ((step === 'LOC' || step === 'DEST') && locations && !gs1) {
+            const isValidLoc = locations.some((l:any) => l.location_code.toUpperCase() === valUpper);
             if (!isValidLoc && mode !== 'MOVE') { 
                  playSound('error');
                  alert(`INVALID LOCATION: ${val}. Scan a bin from the Layout.`);
@@ -530,83 +546,107 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             return;
         }
 
-        // --- AUTO-SELECT TASK ---
+        // --- AUTO-SELECT TASK (If not active) ---
         if (!activeItem) {
             const pending = getPendingList();
-            // Try matching SKU (Case Insensitive)
+            
+            // Try matching SKU
             const matchSku = pending.find((t:any) => {
                 const tSku = (t.sku || t.item_sku || '').toUpperCase();
-                return tSku === val;
+                // Match against simple scan OR parsed GS1 GTIN
+                return tSku === detectedSku; 
             });
+
             if (matchSku) {
                 setActiveItem(matchSku);
-                if (mode === 'RECEIVE') setStep('LOC'); 
+                
+                // [ENHANCEMENT] Auto-fill attributes from GS1
+                if (gs1) {
+                    if (gs1.lot) matchSku._lot = gs1.lot;
+                    if (gs1.expiry) matchSku._expiry = gs1.expiry;
+                    // Feedback to user
+                    alert(`GS1 Detected:\nLot: ${gs1.lot || 'N/A'}\nExp: ${gs1.expiry || 'N/A'}`);
+                }
+
+                // Route based on Mode
+                if (mode === 'RECEIVE') setStep('LOC'); // We have Item+Lot+Exp, now scan Bin
                 else setStep('LOC'); 
+                
                 playSound('success');
                 return;
             }
-            // Try matching Location (Case Insensitive)
+
+            // Try matching Location
             const matchLoc = pending.find((t:any) => {
                 const tLoc = (t.location || t.source_location || '').toUpperCase();
-                return tLoc === val;
+                return tLoc === valUpper;
             });
+
             if (matchLoc) {
                 setActiveItem(matchLoc);
                 setStep('SKU');
                 playSound('success');
                 return;
             }
+
             playSound('error');
-            alert("Item not found in this list.");
+            alert("Item or Location not found in this list.");
             return;
         }
 
-        // Resolve Targets (Case Insensitive)
+        // Resolve Targets
         const rawLoc = mode === 'REPLENISH' ? activeItem.source_location : activeItem.location;
         const targetLoc = (rawLoc || '').toUpperCase();
+        const targetSku = (activeItem.sku || activeItem.item_sku || '').toUpperCase();
         
-        const rawSku = mode === 'CYCLE' || mode === 'REPLENISH' ? activeItem.item_sku : activeItem.sku;
-        const targetSku = (rawSku || '').toUpperCase();
-
         const rawDest = activeItem.dest_location || '';
         const targetDest = rawDest.toUpperCase();
 
         // --- STEP LOGIC ---
         if (step === 'LOC') {
-            if (val === targetLoc || (mode === 'RECEIVE')) {
-                if(mode === 'RECEIVE') {
-                    activeItem._tempLoc = val;
+            // Case-insensitive location check
+            if (valUpper === targetLoc || (mode === 'RECEIVE')) {
+                if (mode === 'RECEIVE') {
+                    activeItem._tempLoc = valUpper; // Store scanned bin
                     setStep('QTY'); 
                 } else {
-                    // If Picking/Replenishing, check for Lots
-                    fetchLotsForActiveItem();
+                    // Picking Logic
+                    fetchLotsForActiveItem(); // If not GS1, fetch options
                 }
                 playSound('success');
             } else {
                 playSound('error');
-                alert(`WRONG BIN! Scanned: ${val}, Expected: ${targetLoc}`);
+                alert(`WRONG BIN! Scanned: ${valUpper}, Expected: ${targetLoc}`);
             }
         } 
-        else if (step === 'LOT_VERIFY') {
-            const targetLot = (selectedLot || '').toUpperCase();
-            if (val === targetLot) {
-                setStep(mode === 'REPLENISH' ? 'DEST' : 'QTY');
-                playSound('success');
-            } else {
-                playSound('error');
-                alert(`WRONG LOT! Scanned: ${val}, Expected: ${targetLot}`);
-            }
-        }
         else if (step === 'SKU') {
-            if (val === targetSku) {
-                if (mode === 'RECEIVE') setStep('LOC'); 
+            if (detectedSku === targetSku) {
+                // [ENHANCEMENT] If GS1 scanned during SKU verification step
+                if (gs1) {
+                    if (gs1.lot) activeItem._lot = gs1.lot;
+                    if (gs1.expiry) activeItem._expiry = gs1.expiry;
+                }
+
+                if (mode === 'RECEIVE') setStep('LOC');
+                else setStep('QTY'); // Or LOT_SELECT if strict picking
+                playSound('success');
             } else {
                  playSound('error');
                  alert(`WRONG SKU! Expected: ${targetSku}`);
             }
-        } 
+        }
+        else if (step === 'LOT_VERIFY') {
+            const targetLot = (selectedLot || '').toUpperCase();
+            if (valUpper === targetLot) {
+                setStep(mode === 'REPLENISH' ? 'DEST' : 'QTY');
+                playSound('success');
+            } else {
+                playSound('error');
+                alert(`WRONG LOT! Scanned: ${valUpper}, Expected: ${targetLot}`);
+            }
+        }
         else if (step === 'DEST') {
-             if (val === targetDest) {
+             if (valUpper === targetDest) {
                  onUpdate(activeItem); 
                  resetCycle();
                  playSound('success');
@@ -633,8 +673,21 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         if (step === 'QTY') {
             const qty = parseInt(manualInput);
             activeItem._qty = qty;
-            // Pass the selected LOT to the update function
-            onUpdate(activeItem, qty, null, selectedLot); 
+            
+            // [UPDATED] Handle Receive vs Pick update signatures
+            if (mode === 'RECEIVE') {
+                // Pass captured GS1 data (Lot/Exp) or manual inputs to the update function
+                onUpdate(
+                    activeItem, 
+                    qty, 
+                    activeItem._tempLoc, 
+                    activeItem._lot || selectedLot, 
+                    activeItem._expiry
+                );
+            } else {
+                onUpdate(activeItem, qty, null, activeItem._lot || selectedLot); 
+            }
+
             resetCycle();
             playSound('success');
         } else {
