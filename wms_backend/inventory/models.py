@@ -6,9 +6,10 @@ class Item(models.Model):
     name = models.CharField(max_length=200)
     attributes = models.JSONField(default=dict, blank=True)
     is_serialized = models.BooleanField(default=False) # Track if this item needs serials
+    abc_class = models.CharField(max_length=1, choices=[('A','A'),('B','B'),('C','C')], default='C')
 
     def __str__(self):
-        return f"{self.sku} - {self.name}"
+        return f"{self.sku} ({self.abc_class}) - {self.name}"
 
 class Location(models.Model):
     LOCATION_TYPES = [

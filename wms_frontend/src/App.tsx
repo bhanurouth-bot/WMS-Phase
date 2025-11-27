@@ -5,13 +5,14 @@ import {
   Layers, LayoutDashboard, 
   X, ChevronRight, ArrowLeft, Barcode, CheckCircle2, MapPin, ArrowRightCircle,
   ArrowDownCircle, PackageCheck, ArrowRightLeft, ClipboardList, Settings2, Play,
-  Grid, Trash2, Map as MapIcon, Download, CalendarClock, QrCode, LogOut
+  Grid, Trash2, Map as MapIcon, Download, CalendarClock, QrCode, LogOut, User
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useScanDetection } from './hooks/useScanDetection';
 import Login from './Login';
 import MobilePicker from './MobilePicker';
-import { parseGS1 } from './utils/gs1'; // Ensure this file exists
+import { parseGS1 } from './utils/gs1'; 
+import BarcodeGenerator from './BarcodeGenerator';
 
 // --- API CONFIG ---
 const API_URL = 'http://127.0.0.1:8000/api';
@@ -202,7 +203,6 @@ const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   );
 };
 
-// [MODIFIED] QuickReceiveModal now includes Status selection & SERIAL NUMBERS
 const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -214,7 +214,6 @@ const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
             lot_number: (form.elements.namedItem('lot') as HTMLInputElement).value,
             expiry_date: (form.elements.namedItem('expiry') as HTMLInputElement).value || null,
             status: (form.elements.namedItem('status') as HTMLSelectElement).value,
-            // New Field
             serials: (form.elements.namedItem('serials') as HTMLInputElement).value 
         };
         onSubmit(data);
@@ -264,7 +263,6 @@ const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
                         </select>
                     </div>
 
-                    {/* --- NEW SERIAL NUMBER INPUT --- */}
                     <div>
                         <label className="text-[10px] font-bold text-slate-500 uppercase">Serial Numbers</label>
                         <textarea 
@@ -441,18 +439,15 @@ const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
 // --- UNIVERSAL SCANNER (VISUAL + FEFO + LOTS + GS1) ---
 
 const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack, onUpdate, onException }: any) => {
-    // Expanded State Machine: LOC -> LOT_SELECT -> LOT_VERIFY -> QTY
     const initialStep = mode === 'RECEIVE' ? 'SKU' : mode === 'MOVE' ? 'LOC' : 'LOC';
     const [step, setStep] = useState<'LOC' | 'SKU' | 'QTY' | 'DEST' | 'LOT' | 'EXPIRY' | 'LOT_SELECT' | 'LOT_VERIFY'>(initialStep);
     
     const [manualInput, setManualInput] = useState('');
     const [activeItem, setActiveItem] = useState<any>(null);
     
-    // Lot/FEFO Specific State
     const [availableLots, setAvailableLots] = useState<InventoryItem[]>([]);
     const [selectedLot, setSelectedLot] = useState<string>('');
 
-    // Move specific state
     const [moveSource, setMoveSource] = useState<string>('');
     const [moveSku, setMoveSku] = useState<string>('');
 
@@ -469,7 +464,6 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         gain.gain.exponentialRampToValueAtTime(0.00001, context.currentTime + 0.3);
     };
 
-    // Fetch lots from inventory when location is confirmed
     const fetchLotsForActiveItem = async () => {
         if (!activeItem) return;
         const targetSku = activeItem.sku || activeItem.item_sku;
@@ -479,7 +473,6 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             const res = await fetch(`${API_URL}/inventory/?item__sku=${targetSku}&location_code=${targetLoc}`);
             const invData: InventoryItem[] = await res.json();
             
-            // Sort by Expiry (FEFO) - null expiry goes last
             const sorted = invData.sort((a, b) => {
                 if (!a.expiry_date) return 1;
                 if (!b.expiry_date) return -1;
@@ -506,9 +499,8 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
     const totalItems = mode === 'REPLENISH' ? data.length : (data.tasks || data.pick_list || data.lines || []).length;
     const progress = totalItems > 0 ? ((totalItems - pendingItems.length) / totalItems) * 100 : 0;
 
-    // [ENHANCED] GS1-128 Aware Scan Processor
     const processScan = (scannedData: string) => {
-        let val = scannedData.trim(); // Keep original case for Lot/Serial, but normalize for SKU if needed
+        let val = scannedData.trim(); 
         const valUpper = val.toUpperCase();
 
         // --- 1. GS1-128 PARSING ---
@@ -516,10 +508,9 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         let detectedSku = '';
 
         if (gs1 && gs1.sku) {
-            // If GS1 detected, we override the scanned value with the SKU to find the task
             detectedSku = gs1.sku.toUpperCase();
             val = detectedSku; 
-            playSound('success'); // Acknowledgement beep for complex scan
+            playSound('success'); 
         } else {
             detectedSku = valUpper;
         }
@@ -550,33 +541,27 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         if (!activeItem) {
             const pending = getPendingList();
             
-            // Try matching SKU
             const matchSku = pending.find((t:any) => {
                 const tSku = (t.sku || t.item_sku || '').toUpperCase();
-                // Match against simple scan OR parsed GS1 GTIN
                 return tSku === detectedSku; 
             });
 
             if (matchSku) {
                 setActiveItem(matchSku);
                 
-                // [ENHANCEMENT] Auto-fill attributes from GS1
                 if (gs1) {
                     if (gs1.lot) matchSku._lot = gs1.lot;
                     if (gs1.expiry) matchSku._expiry = gs1.expiry;
-                    // Feedback to user
                     alert(`GS1 Detected:\nLot: ${gs1.lot || 'N/A'}\nExp: ${gs1.expiry || 'N/A'}`);
                 }
 
-                // Route based on Mode
-                if (mode === 'RECEIVE') setStep('LOC'); // We have Item+Lot+Exp, now scan Bin
+                if (mode === 'RECEIVE') setStep('LOC'); 
                 else setStep('LOC'); 
                 
                 playSound('success');
                 return;
             }
 
-            // Try matching Location
             const matchLoc = pending.find((t:any) => {
                 const tLoc = (t.location || t.source_location || '').toUpperCase();
                 return tLoc === valUpper;
@@ -594,7 +579,6 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             return;
         }
 
-        // Resolve Targets
         const rawLoc = mode === 'REPLENISH' ? activeItem.source_location : activeItem.location;
         const targetLoc = (rawLoc || '').toUpperCase();
         const targetSku = (activeItem.sku || activeItem.item_sku || '').toUpperCase();
@@ -602,16 +586,13 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         const rawDest = activeItem.dest_location || '';
         const targetDest = rawDest.toUpperCase();
 
-        // --- STEP LOGIC ---
         if (step === 'LOC') {
-            // Case-insensitive location check
             if (valUpper === targetLoc || (mode === 'RECEIVE')) {
                 if (mode === 'RECEIVE') {
-                    activeItem._tempLoc = valUpper; // Store scanned bin
+                    activeItem._tempLoc = valUpper; 
                     setStep('QTY'); 
                 } else {
-                    // Picking Logic
-                    fetchLotsForActiveItem(); // If not GS1, fetch options
+                    fetchLotsForActiveItem(); 
                 }
                 playSound('success');
             } else {
@@ -621,14 +602,13 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         } 
         else if (step === 'SKU') {
             if (detectedSku === targetSku) {
-                // [ENHANCEMENT] If GS1 scanned during SKU verification step
                 if (gs1) {
                     if (gs1.lot) activeItem._lot = gs1.lot;
                     if (gs1.expiry) activeItem._expiry = gs1.expiry;
                 }
 
                 if (mode === 'RECEIVE') setStep('LOC');
-                else setStep('QTY'); // Or LOT_SELECT if strict picking
+                else setStep('QTY'); 
                 playSound('success');
             } else {
                  playSound('error');
@@ -674,9 +654,7 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             const qty = parseInt(manualInput);
             activeItem._qty = qty;
             
-            // [UPDATED] Handle Receive vs Pick update signatures
             if (mode === 'RECEIVE') {
-                // Pass captured GS1 data (Lot/Exp) or manual inputs to the update function
                 onUpdate(
                     activeItem, 
                     qty, 
@@ -712,11 +690,9 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         }
     };
 
-    // Map Click Handler (Simulates Scan)
     const handleMapClick = (loc: any) => {
         if (activeItem && step === 'LOC') {
             const target = mode === 'REPLENISH' ? activeItem.source_location : activeItem.location;
-            // Case insensitive match for map click too
             if (loc.location_code.toUpperCase() === target?.toUpperCase()) {
                 processScan(loc.location_code);
             }
@@ -766,10 +742,8 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             ) : (
                 <div className="relative z-10 flex-1 flex flex-col animate-in slide-in-from-right duration-300 h-full">
                     
-                    {/* --- SPLIT VIEW: MAP vs INFO --- */}
                     <div className="flex-1 relative overflow-hidden">
                         {step === 'LOC' && mode !== 'RECEIVE' ? (
-                            // MAP VIEW FOR PICKING
                             <div className="absolute inset-0 flex flex-col">
                                 <div className="bg-yellow-500/20 p-2 text-center text-yellow-300 font-bold text-sm animate-pulse">
                                     GO TO BIN: {activeItem.location || activeItem.source_location}
@@ -787,7 +761,6 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
                                 </div>
                             </div>
                         ) : step === 'LOT_SELECT' ? (
-                            // FEFO LOT SELECTION
                             <div className="p-6 h-full overflow-y-auto">
                                 <h3 className="text-center text-xl font-bold mb-4">Select Lot (FEFO)</h3>
                                 {availableLots.length === 0 && <div className="text-center text-slate-400">No lots found in this bin.</div>}
@@ -813,7 +786,6 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
                                 </div>
                             </div>
                         ) : (
-                            // STANDARD ACTION VIEW
                             <div className="flex flex-col justify-center items-center text-center space-y-6 h-full p-6">
                                 <div className="bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-3xl w-full max-w-sm shadow-2xl relative overflow-hidden">
                                     <div className={`absolute inset-0 opacity-20 ${step === 'SKU' ? 'bg-blue-500' : 'bg-green-500'}`}></div>
@@ -866,17 +838,14 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
 // --- PACKING STATION ---
 
 const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order, onBack:()=>void, onComplete:()=>void, onPrint:(zpl: string)=>void }) => {
-    // Tracks packed qty by SKU (Normalized to Uppercase)
     const [packedItems, setPackedItems] = useState<Record<string, number>>({});
     const [boxSize, setBoxSize] = useState<string>('');
     const [input, setInput] = useState('');
     const [isSealed, setIsSealed] = useState(false);
 
-    // --- Scan State ---
     const [scanStep, setScanStep] = useState<'SKU' | 'LOT'>('SKU');
     const [activeSku, setActiveSku] = useState<string>('');
 
-    // Calculate totals
     const totalItems = order.lines.reduce((acc, l) => acc + l.qty_picked, 0);
     const currentPacked = Object.values(packedItems).reduce((a,b)=>a+b, 0);
     
@@ -909,14 +878,10 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
 
         if (!rawVal) return;
 
-        // --- 1. COMPOSITE SCAN CHECK (Format: SKU|LOT) ---
-        // If the barcode contains a pipe '|', we treat it as a composite code
         if (rawVal.includes('|')) {
             const [skuPart, lotPart] = rawVal.split('|');
             const normSku = skuPart.trim().toUpperCase();
-            // const normLot = lotPart.trim(); // We can record this if backend supports it later
 
-            // Verify SKU exists in order
             const line = order.lines.find(l => (l.item_sku || '').toUpperCase() === normSku);
             if (!line) {
                 playSound('error');
@@ -925,7 +890,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 return;
             }
 
-            // Check if we have space to pack more
             const currentCount = packedItems[normSku] || 0;
             if (currentCount >= line.qty_picked) {
                 playSound('error');
@@ -934,10 +898,8 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 return;
             }
 
-            // SUCCESS: One-step pack
             setPackedItems(prev => ({...prev, [normSku]: (prev[normSku] || 0) + 1}));
             
-            // Ensure we reset to ready state
             setScanStep('SKU');
             setActiveSku('');
             playSound('success');
@@ -945,9 +907,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
             return;
         }
 
-        // --- 2. SEQUENTIAL SCAN LOGIC (Standard) ---
         if (scanStep === 'SKU') {
-            // Step A: Verify SKU
             const line = order.lines.find(l => (l.item_sku || '').toUpperCase() === valUpper);
             
             if (line) {
@@ -956,7 +916,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 
                 if (currentCount < line.qty_picked) {
                     setActiveSku(key); 
-                    setScanStep('LOT'); // Move to Lot Step
+                    setScanStep('LOT'); 
                     playSound('beep');
                     setInput('');
                 } else { 
@@ -970,8 +930,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 setInput(''); 
             }
         } else {
-            // Step B: Verify Lot
-            // Prevent user from accidentally scanning SKU again
             if (valUpper === activeSku) {
                 playSound('error');
                 alert("You scanned the SKU again. Please scan the Lot Number (e.g., P-01).");
@@ -979,10 +937,8 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 return;
             }
 
-            // Commit the pack
             setPackedItems(prev => ({...prev, [activeSku]: (prev[activeSku] || 0) + 1}));
             
-            // Reset to SKU scan for next item
             setScanStep('SKU');
             setActiveSku('');
             playSound('success');
@@ -999,7 +955,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
 
         setIsSealed(true);
         try {
-            // 1. Pack Order
             const resPack = await fetch(`${API_URL}/orders/${order.id}/pack/`, { 
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'}
@@ -1011,7 +966,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 return alert("Error packing order: " + (err.error || "Unknown Error"));
             }
 
-            // 2. Ship Order
             const resShip = await fetch(`${API_URL}/orders/${order.id}/ship/`, { 
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'}
@@ -1023,7 +977,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 return alert("Error shipping order: " + (err.error || "Unknown Error"));
             }
 
-            // 3. Get Label
             const resLabel = await fetch(`${API_URL}/orders/${order.id}/shipping_label/`);
             const zpl = await resLabel.text();
             
@@ -1056,7 +1009,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
             </div>
 
             <div className="flex-1 flex gap-6 overflow-hidden">
-                {/* LEFT: Item List */}
                 <div className="w-1/3 flex flex-col gap-4 overflow-y-auto pr-2">
                     {order.lines.map(line => {
                         const key = (line.item_sku || '').toUpperCase();
@@ -1080,7 +1032,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                     })}
                 </div>
 
-                {/* CENTER: Scanner */}
                 <div className={`flex-1 rounded-3xl border-2 flex flex-col items-center justify-center relative p-8 transition-colors duration-500
                     ${scanStep === 'LOT' ? 'bg-purple-50 border-purple-200' : 'bg-slate-100/50 border-slate-200'}`}>
                     
@@ -1119,7 +1070,6 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
             </div>
 
             <div className="mt-6 flex justify-between items-center">
-                {/* --- BUTTON: Packing Slip --- */}
                 <a 
                     href={`${API_URL}/orders/${order.id}/packing_slip/`}
                     target="_blank"
@@ -1150,6 +1100,9 @@ export default function App() {
   const [tabHistory, setTabHistory] = useState<string[]>([]);
   const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE' | 'RECEIVE' | 'MOVE' | 'REPLENISH'>('IDLE');
   
+  // New Profile Menu State
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+
   // Data
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [items, setItems] = useState<ItemMaster[]>([]);
@@ -1198,7 +1151,6 @@ export default function App() {
   const fetchAll = async () => {
     if (!token) return;
     try {
-        // Added Auth Header to all calls
         const headers = { 'Authorization': `Token ${token}` };
         const responses = await Promise.allSettled([
             fetch(`${API_URL}/inventory/`, {headers}).then(r=>r.json()),
@@ -1214,7 +1166,6 @@ export default function App() {
             fetch(`${API_URL}/locations/`, {headers}).then(r=>r.json()),
         ]);
 
-        // Destructure results safely (defaults to empty array if failed)
         const getData = (idx: number, fallback: any = []) => 
             responses[idx].status === 'fulfilled' ? (responses[idx] as any).value : fallback;
 
@@ -1239,11 +1190,9 @@ export default function App() {
       if(token) fetchAll(); 
   }, [token]);
 
-  // --- WEBSOCKET CONNECTION ---
   useEffect(() => {
     if (!token) return;
 
-    // Connect to Django Channels WebSocket
     const ws = new WebSocket('ws://127.0.0.1:8000/ws/dashboard/');
 
     ws.onopen = () => {
@@ -1255,7 +1204,6 @@ export default function App() {
         const msgType = data.message?.type;
 
         if (msgType === 'INVENTORY_CHANGED' || msgType === 'ORDER_PICKED') {
-            // Refresh data automatically
             console.log('Real-time update received:', msgType);
             fetchAll();
         }
@@ -1270,17 +1218,14 @@ export default function App() {
     };
   }, [token]);
 
-  // If not logged in, show Login Screen
   if (!token) {
       return <Login onLogin={handleLogin} />;
   }
 
-  // If Mobile Mode active, show Mobile Picker
   if (isMobileMode) {
       return <MobilePicker onLogout={handleLogout} />;
   }
 
-  // --- NAVIGATION ---
   const navigate = (tab: string) => {
       if (activeTab !== tab) {
           setTabHistory(prev => [...prev, activeTab]);
@@ -1312,7 +1257,7 @@ export default function App() {
       const item = items.find(i => i.sku === data.sku);
       if(!item) return alert("Invalid SKU");
       const payload = {
-          order_number: `ORD-${Math.floor(Math.random()*9000)+1000}`, // Auto-gen
+          order_number: `ORD-${Math.floor(Math.random()*9000)+1000}`, 
           customer_name: data.customer_name,
           customer_email: data.customer_email,
           customer_address: data.customer_address,
@@ -1414,7 +1359,6 @@ export default function App() {
           method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`}, body: JSON.stringify({ task_id: taskId, qty })
       });
       if(res.ok) {
-          // Refresh handled by WebSocket or manual fetch
           const updatedCounts = await fetch(`${API_URL}/cycle-counts/`, {headers: {'Authorization': `Token ${token}`}}).then(r=>r.json());
           setCounts(updatedCounts);
           const current = updatedCounts.find((c:any) => c.id === activeCount?.id);
@@ -1570,8 +1514,6 @@ export default function App() {
       if(res.ok) { alert((await res.json()).message); fetchAll(); }
   };
 
-  // --- RENDER ---
-
   if (scannerMode !== 'IDLE') {
       return (
           <div className="h-screen w-screen bg-black flex items-center justify-center">
@@ -1627,7 +1569,56 @@ export default function App() {
         <div className="h-12 flex items-center justify-between px-6 bg-white/10 border-b border-black/5 shrink-0">
             <div className="flex items-center gap-4 w-40"><MacTrafficLights onRed={handleLogout} onYellow={handleBack} onGreen={toggleFullscreen} /></div>
             <div className="font-semibold text-sm text-slate-600/80 flex items-center gap-2"><Layers size={14} className="text-blue-600"/> NexWMS <span className="text-slate-400">v3.0</span></div>
-            <div className="w-40 flex justify-end"><button onClick={fetchAll} className="p-1.5 hover:bg-black/5 rounded-md transition-colors text-slate-500"><RefreshCw size={14}/></button></div>
+            <div className="w-40 flex justify-end items-center gap-3">
+                <button onClick={fetchAll} className="p-2 hover:bg-black/5 rounded-full transition-colors text-slate-500">
+                    <RefreshCw size={16}/>
+                </button>
+                <div className="h-6 w-px bg-slate-300/50 mx-1"></div>
+                <div className="relative">
+                    <button 
+                        onClick={() => setShowProfileMenu(!showProfileMenu)}
+                        className="flex items-center gap-2 hover:bg-white/40 p-1.5 pr-3 rounded-full transition-all border border-transparent hover:border-white/40"
+                    >
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md">
+                            <User size={16}/>
+                        </div>
+                        <div className="text-xs font-bold text-slate-600 hidden xl:block">Admin</div>
+                    </button>
+
+                    {showProfileMenu && (
+                        <>
+                            <div className="fixed inset-0 z-40" onClick={() => setShowProfileMenu(false)}></div>
+                            <div className="absolute right-0 top-12 w-56 bg-white/80 backdrop-blur-2xl border border-white/60 rounded-2xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-top-2">
+                                <div className="px-4 py-3 border-b border-black/5 mb-1">
+                                    <div className="text-sm font-bold text-slate-800">Warehouse Admin</div>
+                                    <div className="text-[10px] text-slate-500 font-medium">admin@nexwms.com</div>
+                                </div>
+                                <div className="p-1">
+                                    <button 
+                                        onClick={() => {
+                                            window.history.pushState({}, '', '/mobile');
+                                            setIsMobileMode(true);
+                                        }}
+                                        className="w-full px-3 py-2 text-left text-sm hover:bg-blue-50 text-slate-700 rounded-lg flex items-center gap-3 transition-colors"
+                                    >
+                                        <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center"><QrCode size={16}/></div>
+                                        <div>
+                                            <div className="font-bold">Mobile Scanner</div>
+                                            <div className="text-[10px] text-slate-400">Switch to handheld view</div>
+                                        </div>
+                                    </button>
+                                </div>
+                                <div className="h-px bg-black/5 my-1 mx-2" />
+                                <div className="p-1">
+                                    <button onClick={handleLogout} className="w-full px-3 py-2 text-left text-sm hover:bg-red-50 text-red-600 rounded-lg flex items-center gap-2 transition-colors font-medium">
+                                        <LogOut size={16}/> Sign Out
+                                    </button>
+                                </div>
+                            </div>
+                        </>
+                    )}
+                </div>
+            </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-8 scroll-smooth macos-scrollbar">
@@ -2189,6 +2180,8 @@ export default function App() {
                 </div>
             )}
 
+            {activeTab === 'Barcodes' && <BarcodeGenerator />}
+
         </div>
 
         {/* MacOS Dock */}
@@ -2205,16 +2198,7 @@ export default function App() {
              <DockItem icon={RotateCcw} label="Returns" active={activeTab==='Returns'} onClick={()=>navigate('Returns')} />
              <div className="w-px h-10 bg-black/10 mx-2"></div>
              <DockItem icon={Scan} label="Scanner" active={activeTab==='Scanner'} onClick={()=>navigate('Scanner')} />
-             {/* --- NEW: Mobile Switcher --- */}
-             <DockItem 
-                icon={QrCode}
-                label="Mobile View" 
-                active={false} 
-                onClick={() => {
-                    window.history.pushState({}, '', '/mobile');
-                    setIsMobileMode(true);
-                }} 
-             />
+             <DockItem icon={QrCode} label="Barcodes" active={activeTab==='Barcodes'} onClick={()=>navigate('Barcodes')} />
         </div>
 
       </div>

@@ -1,3 +1,4 @@
+from datetime import timedelta, timezone
 import random
 from django.db import transaction
 from django.db.models import F, Sum
@@ -869,3 +870,54 @@ class InventoryService:
         
         buffer.seek(0)
         return buffer
+    
+    @staticmethod
+    def perform_abc_analysis(days=30):
+        """
+        Analyzes TransactionLogs for the last 30 days to classify items.
+        A-Items: Top 20% of movers
+        B-Items: Next 30%
+        C-Items: Bottom 50%
+        """
+        cutoff = timezone.now() - timedelta(days=days)
+        
+        # 1. Aggregate velocity (Total Quantity Moved in PICK/PACK/SHIP actions)
+        # We focus on Outbound velocity for slotting optimization
+        velocity = TransactionLog.objects.filter(
+            timestamp__gte=cutoff, 
+            action__in=['PICK', 'PACK', 'SHIP']
+        ).values('sku_snapshot').annotate(total_moved=Sum(F('quantity_change') * -1)).order_by('-total_moved')
+
+        # Map SKU to velocity
+        sku_velocity = {v['sku_snapshot']: v['total_moved'] for v in velocity}
+        
+        all_items = list(Item.objects.all())
+        # Attach velocity to item objects (default 0 if no moves)
+        for item in all_items:
+            item._velocity = sku_velocity.get(item.sku, 0)
+
+        # Sort by velocity descending
+        all_items.sort(key=lambda x: x._velocity, reverse=True)
+
+        total_count = len(all_items)
+        a_limit = int(total_count * 0.2) # Top 20%
+        b_limit = int(total_count * 0.5) # Next 30% (up to 50%)
+
+        updates = []
+        stats = {'A': 0, 'B': 0, 'C': 0}
+
+        for i, item in enumerate(all_items):
+            new_class = 'C'
+            if i < a_limit: new_class = 'A'
+            elif i < b_limit: new_class = 'B'
+            
+            if item.abc_class != new_class:
+                item.abc_class = new_class
+                updates.append(item)
+            
+            stats[new_class] += 1
+
+        # Bulk update for performance
+        Item.objects.bulk_update(updates, ['abc_class'])
+
+        return {"success": True, "updated": len(updates), "stats": stats}

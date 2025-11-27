@@ -4,7 +4,7 @@ from .models import RMA, CycleCountSession, CycleCountTask, Item, Inventory, Loc
 class ItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = Item
-        fields = ['id', 'sku', 'name', 'attributes']
+        fields = ['id', 'sku', 'name', 'attributes', 'is_serialized', 'abc_class']
 
 class LocationSerializer(serializers.ModelSerializer):
     class Meta:

@@ -94,6 +94,11 @@ class InventoryViewSet(viewsets.ModelViewSet):
 
         result = InventoryService.move_item(sku, source_loc, dest_loc, qty, user=request.user)
         return Response(result)
+    
+    @action(detail=False, methods=['post'])
+    def run_abc_analysis(self, request):
+        result = InventoryService.perform_abc_analysis()
+        return Response(result)
 
 class TransactionLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = TransactionLog.objects.all().order_by('-timestamp')
