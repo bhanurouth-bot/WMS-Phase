@@ -5,42 +5,32 @@ import {
   Layers, LayoutDashboard, 
   X, ChevronRight, ArrowLeft, Barcode, CheckCircle2, MapPin, ArrowRightCircle,
   ArrowDownCircle, PackageCheck, ArrowRightLeft, ClipboardList, Settings2, Play,
-  Grid, Trash2, Map as MapIcon, Download, CalendarClock, QrCode, LogOut, User,
-  Moon, Sun
+  Map as MapIcon, CalendarClock, QrCode, LogOut, User,
+  Moon, Sun, BarChart3, FileText, Users, Shield, Edit, Upload, Bell,
+  Truck,
+  Tag,
+  Save
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+interface Supplier { id: number; name: string; contact_email: string; }
+import CursorAura from './CursorAura';
+import { motion } from 'motion/react';
 import { useScanDetection } from './hooks/useScanDetection';
 import Login from './Login';
 import MobilePicker from './MobilePicker';
 import { parseGS1 } from './utils/gs1'; 
 import BarcodeGenerator from './BarcodeGenerator';
-import CursorAura from './CursorAura';
+import { printZPL } from './utils/printer';
+import WarehouseMap from './WarehouseMap';
 
 // --- API CONFIG ---
 const API_URL = 'http://127.0.0.1:8000/api';
 
 // --- TYPES ---
-interface InventoryItem { 
-  id: number; 
-  item_sku: string; 
-  item_name: string; 
-  location_code: string; 
-  quantity: number; 
-  available_quantity: number; 
-  reserved_quantity: number; 
-  lot_number?: string; 
-  expiry_date?: string; 
-  status: 'AVAILABLE' | 'DAMAGED' | 'QUARANTINE';
-}
+interface InventoryItem { id: number; item_sku: string; item_name: string; location_code: string; quantity: number; available_quantity: number; reserved_quantity: number; lot_number?: string; expiry_date?: string; status: 'AVAILABLE' | 'DAMAGED' | 'QUARANTINE'; }
 interface ItemMaster { id: number; sku: string; name: string; }
 interface LocationMaster { id: number; location_code: string; location_type: string; zone: string; x: number; y: number; }
 interface OrderLine { id: number; item: number; item_sku: string; qty_ordered: number; qty_allocated: number; qty_picked: number; }
-interface Order { 
-  id: number; order_number: string; customer_name: string; status: string; created_at: string; 
-  customer_address?: string; customer_city?: string; customer_state?: string; customer_zip?: string;
-  lines: OrderLine[]; 
-}
-interface LogItem { id: number; timestamp: string; action: string; sku_snapshot: string; quantity_change: number; location_snapshot: string; }
+interface Order { id: number; order_number: string; customer_name: string; status: string; created_at: string; customer_address?: string; customer_city?: string; customer_state?: string; customer_zip?: string; lines: OrderLine[]; priority: number; is_on_hold: boolean; }interface LogItem { id: number; timestamp: string; action: string; sku_snapshot: string; quantity_change: number; location_snapshot: string; }
 interface DashboardStats { total_stock: number; total_locations: number; low_stock: number; recent_moves: number; heatmap?: {location_snapshot: string, activity: number}[]; }
 interface PurchaseOrder { id: number; po_number: string; supplier_name: string; status: string; created_at: string; lines: {sku: string, qty: number, received: number}[]; }
 interface RMA { id: number; rma_number: string; order_number: string; customer: string; status: string; lines: any[]; }
@@ -49,6 +39,9 @@ interface CycleCountSession { id: number; reference: string; status: string; cre
 interface WavePlan { success: boolean; wave_id: string; pick_list: {sku: string, total_qty: number, location: string, orders: string[], order_ids: number[], status?: string}[]; }
 interface ReplenishTask { id: number; item_sku: string; source_location: string; dest_location: string; qty_to_move: number; status: 'PENDING'|'COMPLETED'; }
 interface BinConfig { id: number; location_code: string; item_sku: string; min_qty: number; max_qty: number; is_pick_face: boolean; }
+interface UserPerformance { leaderboard: {user__username: string, total_actions: number}[]; hourly_picks: any[]; }
+interface UserData { id: number; username: string; email: string; first_name: string; last_name: string; is_staff: boolean; is_active: boolean; group_names: string[]; groups: number[]; }
+interface GroupData { id: number; name: string; }
 
 // --- HELPER COMPONENTS ---
 
@@ -102,85 +95,109 @@ const StatusBadge = ({ status }: { status: string }) => {
   );
 };
 
-// --- REUSABLE WAREHOUSE MAP COMPONENT ---
-const WarehouseMap = ({ locations, inventory, activeZone, onBinClick, targetLocation, showOnlyTargetZone }: any) => {
-    if (!locations || locations.length === 0) {
-        return (
-            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl bg-white/50 dark:bg-slate-800/50">
-                <MapIcon size={48} className="opacity-50 mb-2"/>
-                <p className="font-bold">No Locations Found</p>
-                <p className="text-xs">Add bins in the 'Layout' tab first.</p>
-            </div>
-        );
-    }
+// --- MODALS ---
 
-    const filteredLocations = locations.filter((l:any) => {
-        if (showOnlyTargetZone && targetLocation) {
-            const target = locations.find((loc:any) => loc.location_code === targetLocation);
-            return target ? l.zone === target.zone : true; 
-        }
-        return activeZone === 'All' || l.zone === activeZone;
+const ManageUserModal = ({ user, groups, onClose, onSubmit }: any) => {
+    const [formData, setFormData] = useState({
+        username: user?.username || '',
+        email: user?.email || '',
+        first_name: user?.first_name || '',
+        last_name: user?.last_name || '',
+        password: '',
+        is_staff: user?.is_staff || false,
+        is_active: user?.is_active ?? true,
+        groups: user?.groups || []
     });
 
-    // --- DYNAMIC SIZING ---
-    const maxX = Math.max(...filteredLocations.map((l:any) => l.x || 0), 20); 
-    const maxY = Math.max(...filteredLocations.map((l:any) => l.y || 0), 15); 
-    
-    const gridWidth = (maxX + 2) * 40; 
-    const gridHeight = (maxY + 2) * 40;
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        onSubmit(formData);
+    };
+
+    const toggleGroup = (groupId: number) => {
+        setFormData(prev => ({
+            ...prev,
+            groups: prev.groups.includes(groupId) 
+                ? prev.groups.filter((id: number) => id !== groupId)
+                : [...prev.groups, groupId]
+        }));
+    };
 
     return (
-        <div className="relative w-full h-full bg-slate-50/50 dark:bg-slate-900/50 overflow-hidden border-slate-200 dark:border-slate-700 rounded-xl">
-            <div className="absolute inset-0 p-8 overflow-auto macos-scrollbar flex items-start justify-start">
-                <div 
-                    className="relative bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] dark:bg-[radial-gradient(#334155_1px,transparent_1px)] [background-size:40px_40px] border border-slate-200/50 dark:border-slate-700/50 rounded-lg shadow-inner transition-all duration-500"
-                    style={{ width: `${gridWidth}px`, height: `${gridHeight}px` }}
-                >
-                    {filteredLocations.map((loc:any) => {
-                        const itemCount = inventory?.filter((i:any) => i.location_code === loc.location_code).reduce((a:any,b:any) => a + b.quantity, 0) || 0;
-                        const isOccupied = itemCount > 0;
-                        const isTarget = targetLocation === loc.location_code;
-                        
-                        return (
-                            <motion.button
-                                key={loc.id}
-                                onClick={() => onBinClick(loc)}
-                                initial={false}
-                                animate={isTarget ? { 
-                                    scale: [1, 1.3, 1], 
-                                    boxShadow: ["0px 0px 0px 0px rgba(59, 130, 246, 0)", "0px 0px 15px 5px rgba(59, 130, 246, 0.6)", "0px 0px 0px 0px rgba(59, 130, 246, 0)"],
-                                    borderColor: ["#2563eb", "#60a5fa", "#2563eb"],
-                                    zIndex: 50
-                                } : { scale: 1, zIndex: 1 }}
-                                transition={isTarget ? { duration: 1.5, repeat: Infinity } : {}}
-                                style={{ 
-                                    left: `${(loc.x || 0) * 40}px`, 
-                                    top: `${(loc.y || 0) * 40}px` 
-                                }}
-                                className={`absolute w-8 h-8 rounded-md shadow-sm border flex items-center justify-center group transition-colors duration-200
-                                    ${loc.location_type === 'PICK' ? 'rounded-full' : 'rounded-md'}
-                                    ${isTarget ? 'bg-blue-600 border-blue-500 text-white' : 
-                                      isOccupied ? 'bg-white dark:bg-slate-800 border-blue-400 text-blue-600 dark:text-blue-400 font-bold' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-300 dark:text-slate-600'}
-                                `}
-                            >
-                                {/* Tooltip */}
-                                <span className={`absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-50 ${isTarget ? 'opacity-100' : ''}`}>
-                                    {loc.location_code}
-                                </span>
-                                
-                                {isOccupied && !isTarget && <span className="text-[8px]">{itemCount}</span>}
-                                {isTarget && <MapPin size={14} className="animate-bounce"/>}
-                                {!isOccupied && !isTarget && <Box size={12} strokeWidth={1.5} />}
-                            </motion.button>
-                        );
-                    })}
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in">
+            <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl w-full max-w-lg p-8 shadow-2xl border border-white/40 dark:border-white/10">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800 dark:text-white">
+                        <User className="text-blue-600"/> {user ? 'Edit User' : 'Create User'}
+                    </h2>
+                    <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600 dark:hover:text-white"/></button>
                 </div>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Username</label>
+                            <input required value={formData.username} onChange={e=>setFormData({...formData, username: e.target.value})} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Password {user && '(Reset)'}</label>
+                            <input type="password" value={formData.password} onChange={e=>setFormData({...formData, password: e.target.value})} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" placeholder={user ? "Leave empty to keep" : "Required"} required={!user} />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">First Name</label>
+                            <input value={formData.first_name} onChange={e=>setFormData({...formData, first_name: e.target.value})} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" />
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Last Name</label>
+                            <input value={formData.last_name} onChange={e=>setFormData({...formData, last_name: e.target.value})} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" />
+                        </div>
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Email</label>
+                        <input type="email" value={formData.email} onChange={e=>setFormData({...formData, email: e.target.value})} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" />
+                    </div>
+                    
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 block">Roles & Permissions</label>
+                        <div className="space-y-2 mb-4">
+                            <label className="flex items-center gap-2 cursor-pointer p-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
+                                <input type="checkbox" checked={formData.is_staff} onChange={e=>setFormData({...formData, is_staff: e.target.checked})} className="w-4 h-4 rounded text-blue-600"/>
+                                <span className="text-sm font-bold text-slate-700 dark:text-white flex items-center gap-2"><Shield size={14}/> Admin / Staff Access</span>
+                            </label>
+                            <label className="flex items-center gap-2 cursor-pointer p-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800">
+                                <input type="checkbox" checked={formData.is_active} onChange={e=>setFormData({...formData, is_active: e.target.checked})} className="w-4 h-4 rounded text-blue-600"/>
+                                <span className="text-sm text-slate-700 dark:text-white">Active Account</span>
+                            </label>
+                        </div>
+                        
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase mb-2 block">Groups</label>
+                        <div className="flex flex-wrap gap-2">
+                            {groups.map((g: any) => (
+                                <button
+                                    key={g.id}
+                                    type="button"
+                                    onClick={() => toggleGroup(g.id)}
+                                    className={`px-3 py-1 rounded-full text-xs font-bold border transition-all ${
+                                        formData.groups.includes(g.id)
+                                            ? 'bg-blue-600 text-white border-blue-600'
+                                            : 'bg-transparent text-slate-500 border-slate-300 dark:border-slate-600'
+                                    }`}
+                                >
+                                    {g.name}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <button type="submit" className="w-full py-2.5 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-lg transition-transform active:scale-95 text-sm mt-2">
+                        {user ? 'Save Changes' : 'Create User'}
+                    </button>
+                </form>
             </div>
         </div>
     );
 };
-
-// --- MODALS ---
 
 const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   const imageUrl = `http://api.labelary.com/v1/printers/8dpmm/labels/4x6/0/${encodeURIComponent(zpl)}`;
@@ -197,7 +214,7 @@ const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
           </div>
           <div className="mt-8 w-full grid grid-cols-2 gap-3">
              <button onClick={onClose} className="py-2 rounded-xl font-bold text-slate-500 hover:bg-slate-200 dark:text-slate-400 dark:hover:bg-slate-800 text-sm transition-colors">Cancel</button>
-             <button onClick={() => { alert("Sent to Printer"); onClose(); }} className="py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-500/20">Print Now</button>
+             <button onClick={() => { printZPL(zpl, ""); onClose(); }} className="py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-500/20">Print (QZ)</button>
           </div>
         </div>
       </div>
@@ -881,7 +898,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
         if (!rawVal) return;
 
         if (rawVal.includes('|')) {
-            const [skuPart, lotPart] = rawVal.split('|');
+            const [skuPart] = rawVal.split('|'); // [FIXED] Removed unused lotPart
             const normSku = skuPart.trim().toUpperCase();
 
             const line = order.lines.find(l => (l.item_sku || '').toUpperCase() === normSku);
@@ -959,7 +976,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
         try {
             const resPack = await fetch(`${API_URL}/orders/${order.id}/pack/`, { 
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'}
+                headers: {'Content-Type': 'application/json', 'Authorization': `Token ${localStorage.getItem('token')}`}
             });
             
             if(!resPack.ok) {
@@ -970,7 +987,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
 
             const resShip = await fetch(`${API_URL}/orders/${order.id}/ship/`, { 
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'}
+                headers: {'Content-Type': 'application/json', 'Authorization': `Token ${localStorage.getItem('token')}`}
             });
             
             if(!resShip.ok) {
@@ -979,12 +996,24 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                 return alert("Error shipping order: " + (err.error || "Unknown Error"));
             }
 
-            const resLabel = await fetch(`${API_URL}/orders/${order.id}/shipping_label/`);
-            const zpl = await resLabel.text();
+            const resLabel = await fetch(`${API_URL}/orders/${order.id}/shipping_label/`, {
+                headers: {'Authorization': `Token ${localStorage.getItem('token')}`}
+            });
             
-            onPrint(zpl);
-            onComplete();
-
+            if (resLabel.ok) {
+                const zpl = await resLabel.text();
+                
+                // --- TRY DIRECT PRINT ---
+                try {
+                    await printZPL(zpl, ""); 
+                    alert("Label sent to printer!");
+                } catch (e) {
+                    console.warn("Direct print failed, falling back to screen", e);
+                    onPrint(zpl); // Fallback to on-screen modal
+                }
+                
+                onComplete();
+            }
         } catch (e) {
             console.error(e);
             setIsSealed(false);
@@ -1097,6 +1126,7 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
 
 export default function App() {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [currentUser, setCurrentUser] = useState<any>(null); // [NEW] Track logged in user info
   const [isMobileMode, setIsMobileMode] = useState(window.location.pathname === '/mobile');
   const [activeTab, setActiveTab] = useState('Overview');
   const [tabHistory, setTabHistory] = useState<string[]>([]);
@@ -1137,6 +1167,12 @@ export default function App() {
   const [counts, setCounts] = useState<CycleCountSession[]>([]);
   const [replenishTasks, setReplenishTasks] = useState<ReplenishTask[]>([]);
   const [binConfigs, setBinConfigs] = useState<BinConfig[]>([]);
+  const [userStats, setUserStats] = useState<UserPerformance | null>(null);
+  const [users, setUsers] = useState<UserData[]>([]); // [NEW]
+  const [groups, setGroups] = useState<GroupData[]>([]); // [NEW]
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [labelTab, setLabelTab] = useState<'BIN'|'SHIP'>('BIN');
+  const [customZpl, setCustomZpl] = useState<string>(localStorage.getItem('custom_bin_zpl') || '^XA^FO50,50^ADN,36,20^FD${sku}^FS^XZ');
   
   // Features
   const [selectedOrders, setSelectedOrders] = useState<number[]>([]);
@@ -1156,6 +1192,8 @@ export default function App() {
   const [showQuickReceive, setShowQuickReceive] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
   const [currentZpl, setCurrentZpl] = useState('');
+  const [showUserModal, setShowUserModal] = useState(false); // [NEW]
+  const [editingUser, setEditingUser] = useState<UserData | null>(null); // [NEW]
 
   const handleLogin = (newToken: string) => {
     setToken(newToken);
@@ -1164,16 +1202,23 @@ export default function App() {
 
   const handleLogout = () => {
     setToken(null);
+    setCurrentUser(null);
     localStorage.removeItem('token');
     setIsMobileMode(false);
     window.history.pushState({}, '', '/');
   };
 
-  // Safe Data Fetching
+  // Safe Data Fetching with Pagination Handling
   const fetchAll = async () => {
     if (!token) return;
     try {
         const headers = { 'Authorization': `Token ${token}` };
+        
+        // 1. Fetch Current User first to determine permissions
+        const meRes = await fetch(`${API_URL}/me/`, {headers});
+        if(meRes.ok) setCurrentUser(await meRes.json());
+
+        // 2. Parallel Fetch
         const responses = await Promise.allSettled([
             fetch(`${API_URL}/inventory/`, {headers}).then(r=>r.json()),
             fetch(`${API_URL}/orders/`, {headers}).then(r=>r.json()),
@@ -1186,10 +1231,23 @@ export default function App() {
             fetch(`${API_URL}/replenishment-tasks/`, {headers}).then(r=>r.json()),
             fetch(`${API_URL}/replenishment-rules/`, {headers}).then(r=>r.json()),
             fetch(`${API_URL}/locations/`, {headers}).then(r=>r.json()),
+            // New: User Stats & User Management (Admin only endpoints might return 403, handle gracefully)
+            fetch(`${API_URL}/dashboard/users/`, {headers}).then(r=>r.ok ? r.json() : null).catch(() => null),
+            fetch(`${API_URL}/users/`, {headers}).then(r=>r.ok ? r.json() : []).catch(() => []),
+            fetch(`${API_URL}/groups/`, {headers}).then(r=>r.ok ? r.json() : []).catch(() => []),
+            fetch(`${API_URL}/suppliers/`, {headers}).then(r=>r.ok ? r.json() : []).catch(() => []),
         ]);
 
-        const getData = (idx: number, fallback: any = []) => 
-            responses[idx].status === 'fulfilled' ? (responses[idx] as any).value : fallback;
+        const getData = (idx: number, fallback: any = []) => {
+            if (responses[idx].status === 'fulfilled') {
+                const val = (responses[idx] as any).value;
+                if (val && typeof val === 'object' && Array.isArray(val.results)) {
+                    return val.results;
+                }
+                return val;
+            }
+            return fallback;
+        };
 
         setInventory(getData(0));
         setOrders(getData(1));
@@ -1202,6 +1260,10 @@ export default function App() {
         setReplenishTasks(getData(8));
         setBinConfigs(getData(9));
         setLocations(getData(10));
+        setUserStats(getData(11, null));
+        setUsers(getData(12, []));
+        setGroups(getData(13, []));
+        setSuppliers(getData(14, []));
 
     } catch(e) { 
         console.error("Critical Data Fetch Error:", e); 
@@ -1210,6 +1272,18 @@ export default function App() {
 
   useEffect(() => { 
       if(token) fetchAll(); 
+  }, [token]);
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    const handleGlobalKeys = (e: KeyboardEvent) => {
+        if (!token) return;
+        if (e.key === 'F1') { e.preventDefault(); navigate('Inventory'); }
+        if (e.key === 'F2') { e.preventDefault(); navigate('Orders'); }
+        if (e.key === 'F3') { e.preventDefault(); navigate('Reports'); }
+    };
+    window.addEventListener('keydown', handleGlobalKeys);
+    return () => window.removeEventListener('keydown', handleGlobalKeys);
   }, [token]);
 
   useEffect(() => {
@@ -1536,6 +1610,69 @@ export default function App() {
       if(res.ok) { alert((await res.json()).message); fetchAll(); }
   };
 
+  const handleSaveUser = async (data: any) => {
+      const method = editingUser ? 'PATCH' : 'POST';
+      const url = editingUser ? `${API_URL}/users/${editingUser.id}/` : `${API_URL}/users/`;
+      
+      const res = await fetch(url, {
+          method,
+          headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`},
+          body: JSON.stringify(data)
+      });
+      
+      if(res.ok) {
+          setShowUserModal(false);
+          setEditingUser(null);
+          fetchAll();
+      } else {
+          alert("Failed to save user. Check data.");
+      }
+  };
+
+  // --- NEW HANDLERS (CSV & LABELS) ---
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0]) return;
+    const formData = new FormData();
+    formData.append('file', e.target.files[0]);
+    
+    try {
+        const res = await fetch(`${API_URL}/items/upload_csv/`, {
+            method: 'POST',
+            headers: { 'Authorization': `Token ${token}` },
+            body: formData
+        });
+        
+        if (res.ok) { 
+            alert("Items Imported Successfully!"); 
+            fetchAll(); 
+        } else { 
+            alert("Import failed. Check CSV format."); 
+        }
+    } catch (e) {
+        alert("Network Error during upload");
+    }
+  };
+
+  const handlePrintBinLabel = async (location: any) => {
+      if (!location) return;
+      try {
+          const res = await fetch(`${API_URL}/locations/${location.id}/bin_label/`, {
+              headers: { 'Authorization': `Token ${token}` }
+          });
+          if (res.ok) {
+              const zpl = await res.text();
+              try {
+                  await printZPL(zpl, ""); // Hardware print
+                  alert(`Label sent for ${location.location_code}`);
+              } catch (e) {
+                  setCurrentZpl(zpl); setShowLabel(true); // Screen fallback
+              }
+          } else {
+             alert("Failed to generate label");
+          }
+      } catch (e) { alert("Error printing label"); }
+  };
+
   if (scannerMode !== 'IDLE') {
       return (
           <div className="h-screen w-screen bg-black flex items-center justify-center">
@@ -1571,18 +1708,86 @@ export default function App() {
           </div>
       );
   }
+  const handleAddSupplier = async (e: React.FormEvent) => {
+      e.preventDefault();
+      const form = e.target as HTMLFormElement;
+      const data = {
+          name: (form.elements.namedItem('name') as HTMLInputElement).value,
+          contact_email: (form.elements.namedItem('email') as HTMLInputElement).value
+      };
+      
+      const res = await fetch(`${API_URL}/suppliers/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${token}` },
+          body: JSON.stringify(data)
+      });
+      
+      if(res.ok) { 
+          addToast("Vendor Added", 'success'); 
+          fetchAll(); 
+          form.reset(); 
+      } else { 
+          addToast("Failed to add vendor", 'error'); 
+      }
+  };
+
+  const saveLabelTemplate = () => {
+      localStorage.setItem('custom_bin_zpl', customZpl);
+      addToast("Label Template Saved", 'success');
+  };
 
   return (
     <div className="h-screen w-screen overflow-hidden flex flex-col items-center justify-center p-6 text-slate-800 font-sans selection:bg-blue-200 dark:text-slate-100 dark:selection:bg-blue-900 transition-colors duration-500">
-      <style>{`
-        .macos-scrollbar::-webkit-scrollbar { background: transparent; width: 8px; height: 8px; }
-        .macos-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(0, 0, 0, 0.2); border-radius: 4px; }
-        .macos-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(0, 0, 0, 0.3); }
-        .dark .macos-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.2); }
-        .dark .macos-scrollbar::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.3); }
+       <style>{`
+        /* Track */
+        .macos-scrollbar::-webkit-scrollbar {
+            width: 14px;  /* Wider clickable area */
+            height: 14px;
+            background: transparent;
+        }
+        .macos-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        /* Thumb (The floating pill) */
+        .macos-scrollbar::-webkit-scrollbar-thumb {
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            border: 4px solid transparent; /* Creates the padding effect */
+            background-clip: content-box;  /* Clips background to inside the border */
+            min-height: 40px;
+        }
+        
+        /* Hover State */
+        .macos-scrollbar::-webkit-scrollbar-thumb:hover {
+            background-color: rgba(0, 0, 0, 0.4);
+            border: 3px solid transparent; /* Expands slightly on hover */
+        }
+
+        /* Dark Mode */
+        .dark .macos-scrollbar::-webkit-scrollbar-thumb {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+        .dark .macos-scrollbar::-webkit-scrollbar-thumb:hover {
+            background-color: rgba(255, 255, 255, 0.4);
+        }
+        
+        /* Corner (where X and Y bars meet) */
+        .macos-scrollbar::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+
+        body, html {
+            cursor: url('data:image/svg+xml;utf8,<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5.5 2.5L17.5 14.5L11.5 14.5L15.5 21.5L13.5 22.5L9.5 15.5L5.5 19.5V2.5Z" fill="black" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>') 2 2, auto;
+        }
+
+        /* Pointer (Hand) - macOS style usually just keeps the arrow or uses a specific hand */
+        button, a, [role="button"], .cursor-pointer {
+            cursor: url('data:image/svg+xml;utf8,<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 9.5C8 8.67 8.67 8 9.5 8C10.33 8 11 8.67 11 9.5V14H12V7.5C12 6.67 12.67 6 13.5 6C14.33 6 15 6.67 15 7.5V14H16V8.5C16 7.67 16.67 7 17.5 7C18.33 7 19 7.67 19 8.5V16C19 19.31 16.31 22 13 22H9C5.69 22 3 19.31 3 16V11.5C3 10.67 3.67 10 4.5 10C5.33 10 6 10.67 6 11.5V14H7V9.5C7 9.5 7.22 8 8 9.5Z" fill="black" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>') 10 10, pointer;
+        }
+
       `}</style>
-      
-      {/* [NEW] Cursor Aura Effect (Only visible in Dark Mode) */}
+
       {darkMode && <CursorAura />}
 
       {showLabel && <LabelModal zpl={currentZpl} onClose={()=>setShowLabel(false)} />}
@@ -1590,6 +1795,7 @@ export default function App() {
       {showRMAModal && <CreateRMAModal orders={orders} onClose={()=>setShowRMAModal(false)} onSubmit={handleCreateRMA} />}
       {showLocationModal && <CreateLocationModal onClose={()=>setShowLocationModal(false)} onSubmit={handleCreateLocation} />}
       {showQuickReceive && <QuickReceiveModal items={items} locations={locations} onClose={()=>setShowQuickReceive(false)} onSubmit={handleQuickReceive} />}
+      {showUserModal && <ManageUserModal user={editingUser} groups={groups} onClose={()=>{setShowUserModal(false); setEditingUser(null);}} onSubmit={handleSaveUser}/>}
 
       <div className="w-full max-w-[1400px] h-[85vh] bg-white/60 dark:bg-slate-900/60 backdrop-blur-2xl rounded-[2rem] shadow-2xl border border-white/40 dark:border-white/10 flex flex-col relative overflow-hidden animate-in fade-in zoom-in duration-500 z-10">
         
@@ -1598,7 +1804,6 @@ export default function App() {
             <div className="flex items-center gap-4 w-40"><MacTrafficLights onRed={handleLogout} onYellow={handleBack} onGreen={toggleFullscreen} /></div>
             <div className="font-semibold text-sm text-slate-600/80 dark:text-slate-300 flex items-center gap-2"><Layers size={14} className="text-blue-600 dark:text-blue-400"/> NexWMS <span className="text-slate-400">v3.0</span></div>
             <div className="w-40 flex justify-end items-center gap-3">
-                {/* [NEW] Dark Mode Toggle */}
                 <button 
                   onClick={() => setDarkMode(!darkMode)} 
                   className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-full transition-colors text-slate-500 dark:text-slate-400"
@@ -1619,7 +1824,7 @@ export default function App() {
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md">
                             <User size={16}/>
                         </div>
-                        <div className="text-xs font-bold text-slate-600 dark:text-slate-300 hidden xl:block">Admin</div>
+                        <div className="text-xs font-bold text-slate-600 dark:text-slate-300 hidden xl:block">{currentUser?.username || 'Admin'}</div>
                     </button>
 
                     {showProfileMenu && (
@@ -1660,6 +1865,130 @@ export default function App() {
 
         <div className="flex-1 overflow-y-auto p-8 scroll-smooth macos-scrollbar">
             
+            {activeTab === 'Reports' && (
+                <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    <div className="mb-6">
+                        <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Performance Reports</h2>
+                        <p className="text-slate-500 dark:text-slate-400 text-sm">User activity and warehouse metrics.</p>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-6">
+                        <GlassCard className="col-span-1 min-h-[300px]" noPad>
+                            <div className="p-4 border-b border-black/5 dark:border-white/10 font-bold text-slate-600 dark:text-slate-300 text-sm flex items-center gap-2">
+                                <BarChart3 size={16} className="text-blue-500"/> User Leaderboard (All Time)
+                            </div>
+                            <table className="w-full text-left text-sm">
+                                <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10">
+                                    <tr><th className="p-4">Rank</th><th className="p-4">User</th><th className="p-4 text-right">Actions</th></tr>
+                                </thead>
+                                <tbody className="divide-y divide-black/5 dark:divide-white/10">
+                                    {userStats?.leaderboard?.map((u, i) => (
+                                        <tr key={i} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
+                                            <td className="p-4 w-16">
+                                                <div className={`w-6 h-6 rounded flex items-center justify-center font-bold text-xs ${i===0?'bg-yellow-100 text-yellow-700':i===1?'bg-slate-200 text-slate-700':'bg-orange-100 text-orange-700'}`}>{i+1}</div>
+                                            </td>
+                                            <td className="p-4 font-bold text-slate-700 dark:text-slate-200">{u.user__username || 'System'}</td>
+                                            <td className="p-4 text-right font-mono font-bold text-blue-600 dark:text-blue-400">{u.total_actions}</td>
+                                        </tr>
+                                    ))}
+                                    {!userStats && <tr><td colSpan={3} className="p-8 text-center text-slate-400">Loading stats...</td></tr>}
+                                </tbody>
+                            </table>
+                        </GlassCard>
+
+                        <GlassCard className="col-span-1 min-h-[300px] flex flex-col items-center justify-center text-center p-8 space-y-4">
+                            <div className="w-24 h-24 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center">
+                                <FileText size={48} className="text-slate-400"/>
+                            </div>
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-700 dark:text-slate-200">More Reports Coming Soon</h3>
+                                <p className="text-slate-500 dark:text-slate-400 text-sm max-w-xs">Detailed pick rates, inventory accuracy, and dwell time analytics will be available here.</p>
+                            </div>
+                        </GlassCard>
+                    </div>
+                </div>
+            )}
+
+            {/* USERS TAB (Admin Only) */}
+            {activeTab === 'Users' && (
+                <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-center mb-6">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800 dark:text-white">User Management</h2>
+                            <p className="text-slate-500 dark:text-slate-400 text-sm">Manage access, roles, and warehouse staff.</p>
+                        </div>
+                        <button onClick={()=>{setEditingUser(null); setShowUserModal(true);}} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2">
+                            <Plus size={16}/> Add User
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-6 mb-8">
+                        <GlassCard className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600"><Users size={24}/></div>
+                            <div><div className="text-2xl font-bold">{users.length}</div><div className="text-xs text-slate-500 uppercase">Total Users</div></div>
+                        </GlassCard>
+                        <GlassCard className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center text-green-600"><CheckCircle2 size={24}/></div>
+                            <div><div className="text-2xl font-bold">{users.filter(u=>u.is_active).length}</div><div className="text-xs text-slate-500 uppercase">Active</div></div>
+                        </GlassCard>
+                        <GlassCard className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center text-purple-600"><Shield size={24}/></div>
+                            <div><div className="text-2xl font-bold">{users.filter(u=>u.is_staff).length}</div><div className="text-xs text-slate-500 uppercase">Admins</div></div>
+                        </GlassCard>
+                    </div>
+
+                    <GlassCard noPad className="overflow-hidden">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10">
+                                <tr>
+                                    <th className="p-4">User</th>
+                                    <th className="p-4">Role / Groups</th>
+                                    <th className="p-4">Status</th>
+                                    <th className="p-4 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-black/5 dark:divide-white/10">
+                                {users.map(u => (
+                                    <tr key={u.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
+                                        <td className="p-4">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-slate-600 dark:text-slate-300">
+                                                    {u.username.substring(0,2).toUpperCase()}
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-slate-700 dark:text-slate-200">{u.username}</div>
+                                                    <div className="text-xs text-slate-500">{u.email}</div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="p-4">
+                                            <div className="flex flex-wrap gap-1">
+                                                {u.is_staff && <span className="px-2 py-0.5 rounded bg-purple-100 text-purple-700 text-[10px] font-bold border border-purple-200">ADMIN</span>}
+                                                {u.group_names.map(g => (
+                                                    <span key={g} className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 text-[10px] font-bold border border-slate-200 dark:border-slate-600">{g}</span>
+                                                ))}
+                                                {!u.is_staff && u.group_names.length === 0 && <span className="text-xs text-slate-400 italic">No Roles</span>}
+                                            </div>
+                                        </td>
+                                        <td className="p-4">
+                                            {u.is_active 
+                                                ? <span className="text-green-600 font-bold text-xs flex items-center gap-1"><CheckCircle2 size={12}/> Active</span>
+                                                : <span className="text-red-500 font-bold text-xs flex items-center gap-1"><X size={12}/> Inactive</span>
+                                            }
+                                        </td>
+                                        <td className="p-4 text-right">
+                                            <button onClick={()=>{setEditingUser(u); setShowUserModal(true);}} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg text-slate-500 transition-colors">
+                                                <Edit size={16}/>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </GlassCard>
+                </div>
+            )}
+
             {activeTab === 'Packing' && packingOrder ? (
                 <PackingStationUI order={packingOrder} onBack={() => setPackingOrder(null)} onComplete={() => { setPackingOrder(null); fetchAll(); }} onPrint={(zpl) => { setCurrentZpl(zpl); setShowLabel(true); }} />
             ) : activeTab === 'Packing' && !packingOrder ? (
@@ -1984,7 +2313,10 @@ export default function App() {
                                         >
                                             <AlertCircle size={18}/> Report Missing Item
                                         </button>
-                                        <button className="w-full py-3 bg-slate-800 hover:bg-slate-900 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-colors">
+                                        <button 
+                                            onClick={() => handlePrintBinLabel(selectedLocation)} 
+                                            className="w-full py-3 bg-slate-800 hover:bg-slate-900 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-colors"
+                                        >
                                             <Printer size={18}/> Print Bin Label
                                         </button>
                                     </div>
@@ -2083,7 +2415,34 @@ export default function App() {
                                     <tr key={o.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
                                         <td className="p-4 font-bold text-slate-700 dark:text-slate-200">{o.order_number}</td><td className="p-4 text-slate-700 dark:text-slate-300">{o.customer_name}</td><td className="p-4"><StatusBadge status={o.status}/></td><td className="p-4 text-right font-mono text-slate-500 dark:text-slate-400">{o.lines.length}</td>
                                         <td className="p-4 text-right space-x-2">
-                                            {o.status === 'PENDING' && <button onClick={()=>handleOrderAction(o.id, 'allocate')} className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">Allocate</button>}
+                                            {/* Priority Badge */}
+                                            {o.priority > 1 && (
+                                                <span className="text-[10px] font-bold bg-red-100 text-red-600 px-2 py-1 rounded border border-red-200 inline-block mr-2 align-middle">
+                                                    {o.priority === 3 ? 'URGENT' : 'HIGH'}
+                                                </span>
+                                            )}
+
+                                            {/* Hold Toggle */}
+                                            <button 
+                                                onClick={async () => {
+                                                    await fetch(`${API_URL}/orders/${o.id}/`, {
+                                                        method: 'PATCH',
+                                                        headers: {'Content-Type': 'application/json', 'Authorization': `Token ${token}`},
+                                                        body: JSON.stringify({ is_on_hold: !o.is_on_hold })
+                                                    });
+                                                    fetchAll();
+                                                }}
+                                                className={`text-xs px-3 py-1 rounded font-bold border transition-colors ${
+                                                    o.is_on_hold 
+                                                    ? 'bg-red-500 text-white border-red-600 hover:bg-red-600' 
+                                                    : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                                                }`}
+                                            >
+                                                {o.is_on_hold ? 'ON HOLD' : 'Hold'}
+                                            </button>
+                                            
+                                            {/* Actions */}
+                                            {o.status === 'PENDING' && !o.is_on_hold && <button onClick={()=>handleOrderAction(o.id, 'allocate')} className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">Allocate</button>}
                                             {o.status === 'PICKED' && <button onClick={()=>navigate('Packing')} className="text-xs bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">Pack</button>}
                                             {o.status === 'PACKED' && <button onClick={()=>handleOrderAction(o.id, 'ship')} className="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700">Ship</button>}
                                             {o.status === 'SHIPPED' && <button onClick={()=>handleGenerateLabel(o.id)} className="text-xs bg-slate-800 dark:bg-slate-700 text-white px-3 py-1 rounded hover:bg-black dark:hover:bg-slate-900">Label</button>}
@@ -2104,7 +2463,22 @@ export default function App() {
                             <GlassCard key={p.id} className="hover:scale-[1.01] transition-transform">
                                 <div className="flex justify-between items-start mb-4"><div><div className="font-bold text-lg text-slate-700 dark:text-white">{p.po_number}</div><div className="text-xs text-slate-500 dark:text-slate-400">{p.supplier_name}</div></div><StatusBadge status={p.status}/></div>
                                 <div className="space-y-2 mb-6"><div className="flex justify-between text-xs font-bold text-slate-500 dark:text-slate-400 uppercase"><span>Progress</span><span>{Math.round((p.lines.reduce((a,b)=>a+(b.received||0),0) / p.lines.reduce((a,b)=>a+b.qty,0)) * 100) || 0}%</span></div><div className="h-2 w-full bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-blue-500 transition-all duration-500" style={{width: `${(p.lines.reduce((a,b)=>a+(b.received||0),0) / p.lines.reduce((a,b)=>a+b.qty,0)) * 100}%`}}></div></div></div>
-                                {p.status !== 'RECEIVED' && <button onClick={()=>{setActivePO(p); setScannerMode('RECEIVE')}} className="w-full bg-blue-600 text-white font-bold py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"><Scan size={16}/> Start Receiving</button>}
+                                <div className="flex gap-2 mt-4">
+                                    {p.status !== 'RECEIVED' && (
+                                        <button onClick={()=>{setActivePO(p); setScannerMode('RECEIVE')}} className="flex-1 bg-blue-600 text-white font-bold py-2 rounded-lg shadow-md hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+                                            <Scan size={16}/> Start Receiving
+                                        </button>
+                                    )}
+                                    <a 
+                                        href={`${API_URL}/purchase-orders/${p.id}/download_pdf/`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-600 flex items-center justify-center border border-slate-300 dark:border-slate-600"
+                                        title="Download PO PDF"
+                                    >
+                                        <FileText size={18}/>
+                                    </a>
+                                </div>
                             </GlassCard>
                         ))}
                     </div>
@@ -2155,10 +2529,18 @@ export default function App() {
                 <div className="max-w-6xl mx-auto">
                     <div className="flex justify-between items-center mb-6">
                         <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Inventory</h2>
-                        {/* NEW: Quick Receive Button */}
-                        <button onClick={()=>setShowQuickReceive(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2">
-                            <ArrowDownCircle size={16}/> Quick Receive
-                        </button>
+                        <div className="flex gap-2">
+                            {/* CSV Import Button */}
+                            <div className="relative">
+                                <input type="file" onChange={handleFileUpload} className="hidden" id="csv-upload" accept=".csv"/>
+                                <label htmlFor="csv-upload" className="bg-slate-700 text-white px-4 py-2 rounded-lg cursor-pointer flex items-center gap-2 hover:bg-slate-600 transition-colors shadow-md font-bold text-sm">
+                                    <Upload size={16}/> Import CSV
+                                </label>
+                            </div>
+                            <button onClick={()=>setShowQuickReceive(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2">
+                                <ArrowDownCircle size={16}/> Quick Receive
+                            </button>
+                        </div>
                     </div>
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
@@ -2219,6 +2601,97 @@ export default function App() {
 
             {activeTab === 'Barcodes' && <BarcodeGenerator />}
 
+            {/* VENDORS TAB */}
+            {activeTab === 'Vendors' && (
+                <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-end mb-6">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Vendor Management</h2>
+                            <p className="text-slate-500 text-sm">Manage suppliers for inbound purchase orders.</p>
+                        </div>
+                        {/* Quick Add Form */}
+                        <form onSubmit={handleAddSupplier} className="flex gap-2 bg-white dark:bg-slate-800 p-2 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                            <input name="name" placeholder="Supplier Name" required className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 ring-blue-500/20" />
+                            <input name="email" type="email" placeholder="Contact Email" required className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 ring-blue-500/20" />
+                            <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors flex items-center gap-2"><Plus size={16}/> Add</button>
+                        </form>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-6">
+                        {suppliers.map(s => (
+                            <GlassCard key={s.id} className="relative group hover:border-blue-400 transition-colors">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-12 h-12 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center text-orange-600">
+                                        <Truck size={24}/>
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-slate-800 dark:text-white">{s.name}</h3>
+                                        <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                                            <div className="w-2 h-2 rounded-full bg-green-500"></div> Active Vendor
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700">
+                                    <div className="text-xs font-bold text-slate-400 uppercase">Contact</div>
+                                    <div className="text-sm font-mono text-slate-600 dark:text-slate-300">{s.contact_email}</div>
+                                </div>
+                            </GlassCard>
+                        ))}
+                        {suppliers.length === 0 && (
+                            <div className="col-span-3 py-12 text-center border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl text-slate-400">
+                                No suppliers found. Add one above.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+            {/* LABEL STUDIO TAB */}
+            {activeTab === 'Labels' && (
+                <div className="max-w-6xl mx-auto h-full flex flex-col animate-in fade-in">
+                    <div className="mb-6 flex justify-between items-center">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Label Studio</h2>
+                            <p className="text-slate-500 text-sm">Customize ZPL templates for printing.</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={()=>setLabelTab('BIN')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${labelTab==='BIN' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-100'}`}>Bin Labels</button>
+                            <button onClick={()=>setLabelTab('SHIP')} className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${labelTab==='SHIP' ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-100'}`}>Shipping Labels</button>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 flex gap-6 overflow-hidden pb-6">
+                        {/* Editor */}
+                        <GlassCard className="flex-1 flex flex-col" noPad>
+                            <div className="p-4 border-b border-white/20 bg-black/5 dark:bg-white/5 flex justify-between items-center">
+                                <span className="font-mono text-xs font-bold text-slate-500">ZPL EDITOR</span>
+                                <button onClick={saveLabelTemplate} className="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 flex items-center gap-1"><Save size={12}/> Save Template</button>
+                            </div>
+                            <textarea 
+                                value={customZpl}
+                                onChange={(e) => setCustomZpl(e.target.value)}
+                                className="flex-1 w-full bg-slate-50 dark:bg-slate-900 p-4 font-mono text-xs outline-none resize-none text-slate-800 dark:text-slate-200"
+                                spellCheck={false}
+                            />
+                        </GlassCard>
+
+                        {/* Preview */}
+                        <div className="w-[400px] flex flex-col gap-4">
+                            <GlassCard className="flex-1 flex flex-col items-center justify-center bg-white dark:bg-slate-800 border-2 border-slate-200 dark:border-slate-700">
+                                <div className="text-xs font-bold text-slate-400 mb-4 uppercase tracking-widest">Live Preview</div>
+                                <img 
+                                    src={`http://api.labelary.com/v1/printers/8dpmm/labels/4x6/0/${encodeURIComponent(customZpl.replace('${sku}', 'ITEM-123'))}`} 
+                                    alt="Label Preview" 
+                                    className="shadow-xl border border-gray-200 max-w-full max-h-[400px]" 
+                                />
+                            </GlassCard>
+                            <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-xl text-xs text-blue-700 dark:text-blue-300">
+                                <strong>Variables:</strong> Use <code>{'${sku}'}</code>, <code>{'${loc}'}</code> as placeholders.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
 
         {/* MacOS Dock */}
@@ -2234,11 +2707,26 @@ export default function App() {
              <DockItem icon={ShoppingCart} label="Orders" active={activeTab==='Orders'} onClick={()=>navigate('Orders')} />
              <DockItem icon={RotateCcw} label="Returns" active={activeTab==='Returns'} onClick={()=>navigate('Returns')} />
              <div className="w-px h-10 bg-black/10 dark:bg-white/10 mx-2"></div>
+             <DockItem icon={BarChart3} label="Reports" active={activeTab==='Reports'} onClick={()=>navigate('Reports')} />
              <DockItem icon={Scan} label="Scanner" active={activeTab==='Scanner'} onClick={()=>navigate('Scanner')} />
              <DockItem icon={QrCode} label="Barcodes" active={activeTab==='Barcodes'} onClick={()=>navigate('Barcodes')} />
+             
+             {/* Only show Admin tabs if Staff */}
+             {currentUser?.is_staff && (
+                 <>
+                    <div className="w-px h-10 bg-black/10 dark:bg-white/10 mx-2"></div>
+                    <DockItem icon={Truck} label="Vendors" active={activeTab==='Vendors'} onClick={()=>navigate('Vendors')} />
+                    <DockItem icon={Tag} label="Labels" active={activeTab==='Labels'} onClick={()=>navigate('Labels')} />
+                    <DockItem icon={Users} label="Users" active={activeTab==='Users'} onClick={()=>navigate('Users')} alert={!currentUser.is_active} />
+                 </>
+             )}
         </div>
 
       </div>
     </div>
   );
+}
+
+function addToast(arg0: string, arg1: string) {
+    throw new Error('Function not implemented.');
 }

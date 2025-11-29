@@ -154,7 +154,10 @@ class Order(models.Model):
     customer_city = models.CharField(max_length=100, blank=True)
     customer_state = models.CharField(max_length=100, blank=True)
     customer_zip = models.CharField(max_length=20, blank=True)
-    customer_country = models.CharField(max_length=50, default="USA")
+    customer_country = models.CharField(max_length=50, default="India")
+
+    is_on_hold = models.BooleanField(default=False)
+    priority = models.IntegerField(default=1) # 1=Normal, 2=High, 3=Urgent
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -249,3 +252,13 @@ class ReplenishmentTask(models.Model):
 
     def __str__(self):
         return f"Replenish {self.item.sku}: {self.source_location} -> {self.dest_location} ({self.qty_to_move})"
+    
+
+class DailyInventorySnapshot(models.Model):
+    date = models.DateField(auto_now_add=True)
+    total_items = models.IntegerField()
+    total_locations_used = models.IntegerField()
+    total_value = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    
+    def __str__(self):
+        return f"Snapshot {self.date}"

@@ -1,4 +1,5 @@
-from datetime import timedelta, timezone
+from datetime import timedelta
+from django.utils import timezone
 import random
 from django.db import transaction
 from django.db.models import F, Sum
@@ -493,7 +494,14 @@ class InventoryService:
 
     @staticmethod
     def generate_wave_plan(order_ids):
-        orders = Order.objects.filter(id__in=order_ids, status='ALLOCATED')
+        # Filter: Must be ALLOCATED and NOT ON HOLD
+        # Order By: Priority (Descending), then Date
+        orders = Order.objects.filter(
+            id__in=order_ids, 
+            status='ALLOCATED', 
+            is_on_hold=False
+        ).order_by('-priority', 'created_at')
+        
         if not orders.exists():
             return {"error": "No ALLOCATED orders found for these IDs"}
 
@@ -868,6 +876,48 @@ class InventoryService:
         p.showPage()
         p.save()
         
+        buffer.seek(0)
+        return buffer
+    
+    @staticmethod
+    def generate_po_pdf(po_id):
+        try:
+            po = PurchaseOrder.objects.get(id=po_id)
+        except PurchaseOrder.DoesNotExist:
+            return None
+
+        buffer = io.BytesIO()
+        p = canvas.Canvas(buffer, pagesize=letter)
+        width, height = letter
+
+        # Header
+        p.setFont("Helvetica-Bold", 20)
+        p.drawString(50, height - 50, f"PURCHASE ORDER: {po.po_number}")
+        p.setFont("Helvetica", 12)
+        p.drawString(50, height - 80, f"Vendor: {po.supplier.name}")
+        p.drawString(50, height - 100, f"Date: {po.created_at.strftime('%Y-%m-%d')}")
+        p.drawString(50, height - 120, f"Status: {po.status}")
+
+        # Table Header
+        y = height - 180
+        p.setFillColor(colors.black)
+        p.setFont("Helvetica-Bold", 10)
+        p.drawString(50, y, "SKU")
+        p.drawString(250, y, "QUANTITY ORDERED")
+        p.drawString(400, y, "RECEIVED")
+        p.line(50, y-5, width-50, y-5)
+
+        # Rows
+        y -= 25
+        p.setFont("Helvetica", 10)
+        for line in po.lines: # 'lines' is a JSON list
+            p.drawString(50, y, line.get('sku', ''))
+            p.drawString(250, y, str(line.get('qty', 0)))
+            p.drawString(400, y, str(line.get('received', 0)))
+            y -= 20
+
+        p.showPage()
+        p.save()
         buffer.seek(0)
         return buffer
     

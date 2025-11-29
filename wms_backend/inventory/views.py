@@ -1,17 +1,51 @@
+from datetime import timedelta
+from django.utils import timezone
 from rest_framework import viewsets, status, filters
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from django.http import HttpResponse, FileResponse
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum, Count, F
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from django.db.models.functions import TruncHour
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.pagination import PageNumberPagination
+from django.contrib.auth.models import User, Group
 
+# Services & Tasks
+from .services import InventoryService
+from .carrier import CarrierService
 from .tasks import generate_wave_plan_task
 
-from .serializers import CycleCountSessionSerializer, ItemSerializer, InventorySerializer, LocationConfigurationSerializer, LocationSerializer, PickBatchSerializer, PurchaseOrderSerializer, RMASerializer, ReplenishmentTaskSerializer, SupplierSerializer, TransactionLogSerializer, OrderSerializer
-from .models import RMA, CycleCountSession, Item, Inventory, Location, LocationConfiguration, PickBatch, PurchaseOrder, ReplenishmentTask, Supplier, TransactionLog, Order
-from .services import InventoryService
+# Models
+from .models import (
+    RMA, CycleCountSession, Item, Inventory, Location, LocationConfiguration, 
+    PickBatch, PurchaseOrder, ReplenishmentTask, Supplier, TransactionLog, Order
+)
+
+# Serializers
+from .serializers import (
+    CycleCountSessionSerializer, GroupSerializer, ItemSerializer, InventorySerializer, 
+    LocationConfigurationSerializer, LocationSerializer, PickBatchSerializer, 
+    PurchaseOrderSerializer, RMASerializer, ReplenishmentTaskSerializer, 
+    SupplierSerializer, TransactionLogSerializer, OrderSerializer, UserSerializer
+)
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 1000
+
+# --- NEW VIEWSETS FOR USER MANAGEMENT ---
+class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all().order_by('id')
+    serializer_class = UserSerializer
+    permission_classes = [IsAdminUser] # Security: Only admins can edit users
+
+class GroupViewSet(viewsets.ModelViewSet):
+    queryset = Group.objects.all().order_by('name')
+    serializer_class = GroupSerializer
+    permission_classes = [IsAdminUser]
+# ----------------------------------------
 
 class ItemViewSet(viewsets.ModelViewSet):
     queryset = Item.objects.all()
@@ -23,28 +57,48 @@ class LocationViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter]
     search_fields = ['location_code', 'zone']
 
+    # --- ADD THIS ACTION ---
+    @action(detail=True, methods=['get'])
+    def bin_label(self, request, pk=None):
+        try:
+            location = self.get_object()
+            # Simple ZPL for a Bin Label (Barcode + Human Readable)
+            zpl_code = f"""
+            ^XA
+            ^CF0,50
+            ^FO50,50^FDLOC: {location.zone}^FS
+            ^CF0,100
+            ^FO50,110^FD{location.location_code}^FS
+            ^BY3,2,150
+            ^FO50,250^BC^FD{location.location_code}^FS
+            ^CF0,30
+            ^FO50,450^FDType: {location.location_type}^FS
+            ^XZ
+            """
+            return HttpResponse(zpl_code.strip(), content_type="text/plain")
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
 class InventoryViewSet(viewsets.ModelViewSet):
     queryset = Inventory.objects.all().select_related('item').order_by('location_code')
     serializer_class = InventorySerializer
     filter_backends = [filters.SearchFilter, DjangoFilterBackend]
     search_fields = ['item__sku', 'item__name', 'location_code']
     filterset_fields = ['location_code', 'item__sku']
+    pagination_class = StandardResultsSetPagination
 
     @action(detail=False, methods=['post'])
     def receive(self, request):
         sku = request.data.get('sku')
         location = request.data.get('location')
         qty = int(request.data.get('quantity', 1))
-        
         lot_number = request.data.get('lot_number')
         expiry_date = request.data.get('expiry_date')
-        # --- NEW: Capture status ---
         inv_status = request.data.get('status', 'AVAILABLE') 
 
         if not all([sku, location]):
             return Response({'error': 'SKU and Location required'}, status=400)
 
-        # --- Pass status to service ---
         result = InventoryService.receive_item(sku, location, qty, lot_number, expiry_date, inv_status, serials=None, user=request.user)
         return Response(result)
 
@@ -61,24 +115,15 @@ class InventoryViewSet(viewsets.ModelViewSet):
     def zpl_label(self, request, pk=None):
         try:
             inv = self.get_object()
-            zpl_code = f"""
-            ^XA
-            ^FO50,50^ADN,36,20^FD{inv.item.name[:25]}^FS
-            ^FO50,100^ADN,18,10^FDSKU: {inv.item.sku}^FS
-            ^FO50,130^ADN,18,10^FDLOC: {inv.location_code}^FS
-            ^FO50,180^BY2,2,100^BCN,100,Y,N,N^FD{inv.item.sku}^FS
-            ^XZ
-            """
-            return HttpResponse(zpl_code.strip(), content_type="text/plain")
+            zpl_code = f"^XA^FO50,50^ADN,36,20^FD{inv.item.name[:25]}^FS^FO50,100^ADN,18,10^FDSKU: {inv.item.sku}^FS^FO50,130^ADN,18,10^FDLOC: {inv.location_code}^FS^FO50,180^BY2,2,100^BCN,100,Y,N,N^FD{inv.item.sku}^FS^XZ"
+            return HttpResponse(zpl_code, content_type="text/plain")
         except Exception as e:
             return Response({'error': str(e)}, status=500)
         
     @action(detail=False, methods=['get'])
     def suggest_location(self, request):
         sku = request.query_params.get('sku')
-        if not sku:
-            return Response({'error': 'SKU parameter required'}, status=400)
-        
+        if not sku: return Response({'error': 'SKU parameter required'}, status=400)
         result = InventoryService.suggest_putaway_location(sku)
         return Response(result)
     
@@ -107,12 +152,12 @@ class TransactionLogViewSet(viewsets.ReadOnlyModelViewSet):
 class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.all().order_by('-created_at')
     serializer_class = OrderSerializer
+    pagination_class = StandardResultsSetPagination
 
     @action(detail=True, methods=['post'])
     def allocate(self, request, pk=None):
         result = InventoryService.allocate_order(pk)
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
     
     @action(detail=True, methods=['post'])
@@ -121,93 +166,39 @@ class OrderViewSet(viewsets.ModelViewSet):
         location = request.data.get('location')
         qty = int(request.data.get('qty', 1))
         lot_number = request.data.get('lot_number') 
-
         result = InventoryService.pick_order_item(pk, sku, location, qty, lot_number)
-        
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
 
     @action(detail=True, methods=['post'])
     def pack(self, request, pk=None):
         result = InventoryService.pack_order(pk)
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
 
     @action(detail=True, methods=['post'])
     def ship(self, request, pk=None):
         result = InventoryService.ship_order(pk)
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
 
     @action(detail=True, methods=['get'])
     def shipping_label(self, request, pk=None):
-        try:
-            order = self.get_object()
-            if order.status not in ['SHIPPED', 'PACKED']:
-                 return Response({'error': 'Order must be PACKED or SHIPPED to generate label'}, status=400)
-
-            addr = order.customer_address or "No Address Provided"
-            city = order.customer_city or "Unknown City"
-            state = order.customer_state or "XX"
-            zip_code = order.customer_zip or "00000"
-
-            zpl_code = f"""
-            ^XA
-            ^FX Top section
-            ^CF0,60
-            ^FO50,50^GB100,100,100^FS
-            ^FO75,75^FR^GB100,100,100^FS
-            ^FO93,93^GB40,40,40^FS
-            ^FO220,50^FDIntershipping, Inc.^FS
-            ^CF0,30
-            ^FO220,115^FD1000 Shipping Lane^FS
-            ^FO220,155^FDShelbyville TN 38102^FS
-            ^FO220,195^FDUnited States (USA)^FS
-            ^FO50,250^GB700,3,3^FS
-
-            ^FX Recipient
-            ^CF0,30
-            ^FO50,300^FD{order.customer_name}^FS
-            ^FO50,340^FD{addr}^FS
-            ^FO50,380^FD{city}, {state} {zip_code}^FS
-            ^CFA,30
-            ^FO50,430^FDOrder #: {order.order_number}^FS
-            ^FO50,470^FDSKU Count: {order.lines.count()}^FS
-            ^FO50,530^GB700,3,3^FS
-
-            ^FX Barcode
-            ^BY5,2,270
-            ^FO100,580^BC^FD{order.order_number}^FS
-            ^XZ
-            """
-            return HttpResponse(zpl_code.strip(), content_type="text/plain")
-        except Exception as e:
-            return Response({'error': str(e)}, status=500)
+        order = self.get_object()
+        zpl_code = CarrierService.generate_label(order)
+        return HttpResponse(zpl_code.strip(), content_type="text/plain")
         
     @action(detail=False, methods=['post'])
     def wave_plan(self, request):
         order_ids = request.data.get('order_ids', [])
-        if not order_ids:
-             return Response({'error': 'No order IDs provided'}, status=400)
-        
-        # [NEW] Call the task asynchronously
+        if not order_ids: return Response({'error': 'No order IDs provided'}, status=400)
         task = generate_wave_plan_task.delay(order_ids)
-        
-        return Response({
-            "message": "Wave planning started.", 
-            "task_id": task.id, 
-            "status": "PROCESSING"
-        }, status=202) # 202 Accepted
+        return Response({"message": "Wave planning started.", "task_id": task.id, "status": "PROCESSING"}, status=202)
 
     @action(detail=False, methods=['post'])
     def wave_complete(self, request):
         order_ids = request.data.get('order_ids', [])
-        if not order_ids:
-             return Response({'error': 'No order IDs provided'}, status=400)
-
+        if not order_ids: return Response({'error': 'No order IDs provided'}, status=400)
         result = InventoryService.complete_wave(order_ids)
         return Response(result)
     
@@ -216,23 +207,15 @@ class OrderViewSet(viewsets.ModelViewSet):
         sku = request.data.get('sku')
         location = request.data.get('location')
         qty = int(request.data.get('qty', 1))
-        
         result = InventoryService.record_short_pick(pk, sku, location, qty)
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
     
     @action(detail=True, methods=['get'])
     def packing_slip(self, request, pk=None):
         pdf_buffer = InventoryService.generate_packing_slip_pdf(pk)
-        if not pdf_buffer:
-            return Response({'error': 'Order not found'}, status=404)
-        
-        return FileResponse(
-            pdf_buffer, 
-            as_attachment=True, 
-            filename=f"packing_slip_{pk}.pdf"
-        )
+        if not pdf_buffer: return Response({'error': 'Order not found'}, status=404)
+        return FileResponse(pdf_buffer, as_attachment=True, filename=f"packing_slip_{pk}.pdf")
     
 class PickBatchViewSet(viewsets.ModelViewSet):
     queryset = PickBatch.objects.all()
@@ -251,7 +234,6 @@ class PickBatchViewSet(viewsets.ModelViewSet):
         if "error" in res: return Response(res, status=400)
         return Response(res)
 
-
 class SupplierViewSet(viewsets.ModelViewSet):
     queryset = Supplier.objects.all()
     serializer_class = SupplierSerializer
@@ -259,42 +241,24 @@ class SupplierViewSet(viewsets.ModelViewSet):
 class PurchaseOrderViewSet(viewsets.ModelViewSet):
     queryset = PurchaseOrder.objects.all().order_by('-created_at')
     serializer_class = PurchaseOrderSerializer
+    pagination_class = StandardResultsSetPagination
 
     @action(detail=False, methods=['post'])
     def auto_replenish(self, request):
-        """
-        Finds items with < 10 quantity and creates a Draft PO.
-        NOW USES SEQUENTIAL SERIAL NUMBERS (e.g. PO-00001).
-        """
         low_stock_items = Inventory.objects.filter(quantity__lt=10)
         if not low_stock_items.exists():
             return Response({"message": "No low stock items found."}, status=200)
 
-        supplier, _ = Supplier.objects.get_or_create(
-            name="Global Supplies Inc.", 
-            defaults={"contact_email": "orders@globalsupplies.com"}
-        )
-
-        lines = []
-        for inv in low_stock_items:
-            qty_needed = 50 - inv.quantity
-            lines.append({"sku": inv.item.sku, "qty": qty_needed, "received": 0})
-
-        # --- FIXED: SEQUENTIAL PO GENERATION ---
+        supplier, _ = Supplier.objects.get_or_create(name="Global Supplies Inc.", defaults={"contact_email": "orders@globalsupplies.com"})
+        lines = [{"sku": inv.item.sku, "qty": 50 - inv.quantity, "received": 0} for inv in low_stock_items]
+        
         next_id = PurchaseOrder.objects.count() + 1
-        po_number = f"PO-{next_id:05d}" # e.g. PO-00001
-
+        po_number = f"PO-{next_id:05d}"
         while PurchaseOrder.objects.filter(po_number=po_number).exists():
             next_id += 1
             po_number = f"PO-{next_id:05d}"
 
-        po = PurchaseOrder.objects.create(
-            supplier=supplier,
-            po_number=po_number,
-            status='DRAFT',
-            lines=lines
-        )
-
+        po = PurchaseOrder.objects.create(supplier=supplier, po_number=po_number, status='DRAFT', lines=lines)
         return Response({"message": f"Created PO {po.po_number}", "po_id": po.id})
 
     @action(detail=True, methods=['post'])
@@ -304,17 +268,17 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
         qty = int(request.data.get('qty', 1))
         lot_number = request.data.get('lot_number')
         expiry_date = request.data.get('expiry_date')
-
-        if not location:
-            return Response({'error': 'Location is required. Scan a bin.'}, status=400)
-        if not sku:
-            return Response({'error': 'SKU is required.'}, status=400)
-
+        if not location or not sku: return Response({'error': 'Location and SKU required'}, status=400)
         result = InventoryService.receive_po_item(pk, sku, location, qty, lot_number, expiry_date)
-        
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
+    
+    @action(detail=True, methods=['get'])
+    def download_pdf(self, request, pk=None):
+        pdf_buffer = InventoryService.generate_po_pdf(pk)
+        if not pdf_buffer:
+            return Response({'error': 'PO not found'}, status=404)
+        return FileResponse(pdf_buffer, as_attachment=True, filename=f"po_{pk}.pdf")
 
 class RMAViewSet(viewsets.ModelViewSet):
     queryset = RMA.objects.all().order_by('-created_at')
@@ -322,50 +286,38 @@ class RMAViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def process_receipt(self, request, pk=None):
-        # Allow overriding the return location (e.g., QA-01)
         location = request.data.get('location', 'RETURNS-DOCK')
         result = InventoryService.process_return_receipt(pk, location)
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
 
 class CycleCountViewSet(viewsets.ModelViewSet):
     queryset = CycleCountSession.objects.all().order_by('-created_at')
     serializer_class = CycleCountSessionSerializer
+    pagination_class = StandardResultsSetPagination
 
     @action(detail=False, methods=['post'])
     def generate(self, request):
         limit = int(request.data.get('limit', 5))
         aisle = request.data.get('aisle', None)
         result = InventoryService.create_cycle_count(aisle, limit)
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
 
     @action(detail=True, methods=['post'])
     def submit_task(self, request, pk=None):
-        # pk here refers to the SESSION id, but we need TASK id from body
         task_id = request.data.get('task_id')
         qty = int(request.data.get('qty', 0))
-        
         result = InventoryService.submit_count(task_id, qty)
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
     
     @action(detail=False, methods=['post'])
     def create_for_location(self, request):
-        """
-        Triggered by the 'Item Missing' button on the visual map.
-        Creates an immediate cycle count for a specific location.
-        """
         location_code = request.data.get('location')
-        if not location_code:
-            return Response({'error': 'Location required'}, status=400)
-            
+        if not location_code: return Response({'error': 'Location required'}, status=400)
         result = InventoryService.create_location_count(location_code)
-        if "error" in result:
-            return Response(result, status=400)
+        if "error" in result: return Response(result, status=400)
         return Response(result)
 
 class LocationConfigurationViewSet(viewsets.ModelViewSet):
@@ -387,19 +339,17 @@ class ReplenishmentTaskViewSet(viewsets.ModelViewSet):
         if "error" in res: return Response(res, status=400)
         return Response(res)
 
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def current_user(request):
-    """
-    Return the currently logged-in user's details.
-    """
     user = request.user
     return Response({
         'id': user.id,
         'username': user.username,
         'email': user.email,
         'is_staff': user.is_staff,
+        'is_active': user.is_active,
+        'groups': list(user.groups.values_list('id', flat=True)),
         'initials': f"{user.first_name[:1]}{user.last_name[:1]}".upper() if user.first_name else user.username[:2].upper()
     })
 
@@ -409,18 +359,31 @@ def dashboard_stats(request):
     total_locations = Inventory.objects.count()
     low_stock = Inventory.objects.filter(quantity__lt=10).count()
     recent_moves = TransactionLog.objects.count()
-
-    # --- NEW: Heatmap / Velocity Data ---
-    # Get top 10 most active bins based on transaction logs
-    # This drives the "Velocity" view if you implement it in the frontend
-    heatmap = TransactionLog.objects.values('location_snapshot')\
-        .annotate(activity=Count('id'))\
-        .order_by('-activity')[:10]
+    heatmap = TransactionLog.objects.values('location_snapshot').annotate(activity=Count('id')).order_by('-activity')[:10]
 
     return Response({
         "total_stock": total_stock,
         "total_locations": total_locations,
         "low_stock": low_stock,
         "recent_moves": recent_moves,
-        "heatmap": list(heatmap) # Returns [{"location_snapshot": "A-01", "activity": 50}, ...]
+        "heatmap": list(heatmap)
     })
+
+# --- NEW VIEW FOR REPORTS ---
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def user_performance_stats(request):
+    user_stats = TransactionLog.objects.values('user__username').annotate(total_actions=Count('id')).order_by('-total_actions')
+    
+    last_24h = timezone.now() - timedelta(hours=24)
+    picks_per_hour = TransactionLog.objects.filter(timestamp__gte=last_24h, action='PICK')\
+        .annotate(hour=TruncHour('timestamp'))\
+        .values('hour', 'user__username')\
+        .annotate(count=Count('id'))\
+        .order_by('hour')
+
+    return Response({
+        "leaderboard": list(user_stats),
+        "hourly_picks": list(picks_per_hour)
+    })
+# ----------------------------

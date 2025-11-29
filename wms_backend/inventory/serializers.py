@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import RMA, CycleCountSession, CycleCountTask, Item, Inventory, Location, LocationConfiguration, PickBatch, RMALine, ReplenishmentTask, TransactionLog, Order, OrderLine, Supplier, PurchaseOrder
+from django.contrib.auth.models import User, Group
 
 class ItemSerializer(serializers.ModelSerializer):
     class Meta:
@@ -11,6 +12,47 @@ class LocationSerializer(serializers.ModelSerializer):
         model = Location
         fields = ['id', 'location_code', 'location_type', 'zone', 'x', 'y']
 
+class GroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Group
+        fields = ['id', 'name']
+
+class UserSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=False)
+    groups = serializers.PrimaryKeyRelatedField(many=True, queryset=Group.objects.all(), required=False)
+    group_names = serializers.StringRelatedField(many=True, source='groups', read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'first_name', 'last_name', 'email', 'is_staff', 'is_active', 'password', 'groups', 'group_names']
+
+    def create(self, validated_data):
+        password = validated_data.pop('password', None)
+        groups = validated_data.pop('groups', [])
+        user = User.objects.create(**validated_data)
+        if password:
+            user.set_password(password)
+            user.save()
+        if groups:
+            user.groups.set(groups)
+        return user
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        groups = validated_data.pop('groups', None)
+        
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+            
+        if password:
+            instance.set_password(password)
+            
+        if groups is not None:
+            instance.groups.set(groups)
+            
+        instance.save()
+        return instance
+    
 class InventorySerializer(serializers.ModelSerializer):
     item_sku = serializers.CharField(source='item.sku', read_only=True)
     item_name = serializers.CharField(source='item.name', read_only=True)
@@ -58,7 +100,8 @@ class OrderSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'customer_name', 
             'customer_email', 'customer_address', 'customer_city', 'customer_state', 'customer_zip', 'customer_country',
-            'status', 'created_at', 'lines'
+            'status', 'created_at', 'lines',
+            'is_on_hold', 'priority' # <--- Add these
         ]
 
     def create(self, validated_data):

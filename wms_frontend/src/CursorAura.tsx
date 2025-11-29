@@ -1,83 +1,58 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
+import { motion, useMotionValue, useSpring } from 'motion/react';
 
-const CursorAura: React.FC = () => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const mouseRef = useRef({ x: 0, y: 0 });
-  // Store waves: x, y, radius, alpha (opacity)
-  const wavesRef = useRef<{ x: number; y: number; r: number; a: number; color: string }[]>([]);
+export default function CursorAura() {
+    const [isClicking, setIsClicking] = useState(false);
+    
+    // 1. Track raw mouse position
+    const mouseX = useMotionValue(-100);
+    const mouseY = useMotionValue(-100);
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    // 2. Create smooth spring physics for the aura (The "Better" part)
+    // Damping: Controls how fast it settles (friction)
+    // Stiffness: Controls how tight it follows
+    const springConfig = { damping: 20, stiffness: 150, mass: 0.5 };
+    const auraX = useSpring(mouseX, springConfig);
+    const auraY = useSpring(mouseY, springConfig);
 
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    window.addEventListener('resize', resize);
-    resize();
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            // Offset by 16px (half width) to center the aura on the cursor
+            mouseX.set(e.clientX - 16); 
+            mouseY.set(e.clientY - 16);
+        };
 
-    const onMouseMove = (e: MouseEvent) => {
-      mouseRef.current = { x: e.clientX, y: e.clientY };
-    };
-    window.addEventListener('mousemove', onMouseMove);
+        const handleMouseDown = () => setIsClicking(true);
+        const handleMouseUp = () => setIsClicking(false);
 
-    let frameCount = 0;
-    let animationFrameId: number;
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mousedown', handleMouseDown);
+        window.addEventListener('mouseup', handleMouseUp);
 
-    const animate = () => {
-      frameCount++;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mousedown', handleMouseDown);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [mouseX, mouseY]);
 
-      // Create a new wave every few frames for a trail effect
-      if (frameCount % 8 === 0) {
-        wavesRef.current.push({
-          x: mouseRef.current.x,
-          y: mouseRef.current.y,
-          r: 5, // Start small
-          a: 0.8, // Start opaque
-          color: `hsl(${frameCount % 360}, 70%, 60%)` // Rainbow effect or pick a static color like 'cyan'
-        });
-      }
-
-      // Update and Draw waves
-      for (let i = wavesRef.current.length - 1; i >= 0; i--) {
-        const wave = wavesRef.current[i];
-        
-        // Expand
-        wave.r += 1.5;
-        // Fade
-        wave.a -= 0.015;
-
-        if (wave.a <= 0) {
-          wavesRef.current.splice(i, 1);
-          continue;
-        }
-
-        ctx.beginPath();
-        ctx.arc(wave.x, wave.y, wave.r, 0, Math.PI * 2);
-        // Use a nice blue/cyan gradient look or the dynamic color
-        ctx.strokeStyle = `rgba(56, 189, 248, ${wave.a})`; // Tailwind Sky-400 color
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.closePath();
-      }
-
-      animationFrameId = requestAnimationFrame(animate);
-    };
-
-    animate();
-
-    return () => {
-      window.removeEventListener('resize', resize);
-      window.removeEventListener('mousemove', onMouseMove);
-      cancelAnimationFrame(animationFrameId);
-    };
-  }, []);
-
-  return <canvas ref={canvasRef} className="fixed inset-0 pointer-events-none z-0" />;
-};
-
-export default CursorAura;
+    return (
+        <motion.div
+            className="fixed top-0 left-0 w-8 h-8 rounded-full pointer-events-none z-[9999]"
+            style={{
+                x: auraX,
+                y: auraY,
+                // Glassy look
+                border: '1px solid rgba(255, 255, 255, 0.3)',
+                background: 'rgba(255, 255, 255, 0.1)',
+                backdropFilter: 'blur(2px)',
+                boxShadow: '0 0 10px rgba(255, 255, 255, 0.1)'
+            }}
+            // Animate scale on click
+            animate={{ 
+                scale: isClicking ? 0.8 : 1,
+            }}
+            transition={{ duration: 0.1 }}
+        />
+    );
+}

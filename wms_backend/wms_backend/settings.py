@@ -1,19 +1,33 @@
 """
 Django settings for wms_backend project.
 """
-
+import os
 from pathlib import Path
+from dotenv import load_dotenv
+from celery.schedules import crontab
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+load_dotenv()
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-i7@*3&^y-z4c&vma#bnvy6ttpd%*%&ywc&sfrsgwe=&&@dv!rh'
-
+SECRET_KEY = os.getenv('SECRET_KEY','django-insecure-i7@*3&^y-z4c&vma#bnvy6ttpd%*%&ywc&sfrsgwe=&&@dv!rh')
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+allowed_origins_env = os.getenv('CORS_ALLOWED_ORIGINS', '')
+CORS_ALLOWED_ORIGINS = [
+    origin.strip() 
+    for origin in allowed_origins_env.split(',') 
+    if origin.strip()
+]
+
+if not CORS_ALLOWED_ORIGINS and DEBUG:
+    CORS_ALLOWED_ORIGINS = [
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+]
 
 # Application definition
 
@@ -104,11 +118,23 @@ USE_TZ = True
 STATIC_URL = 'static/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-CORS_ALLOW_ALL_ORIGINS = True 
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50 # Default page size
+}
+
+CELERY_BEAT_SCHEDULE = {
+    'snapshot-every-midnight': {
+        'task': 'inventory.tasks.take_inventory_snapshot',
+        'schedule': crontab(minute=0, hour=0), # Daily at midnight
+    },
+    'low-stock-alert-morning': {
+        'task': 'inventory.tasks.check_low_stock_and_alert',
+        'schedule': crontab(minute=0, hour=8), # Daily at 8:00 AM
+    },
 }

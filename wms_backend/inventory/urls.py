@@ -1,14 +1,17 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-# Import views from the current directory (.)
 from .views import (
-    CycleCountViewSet, ItemViewSet, InventoryViewSet, LocationViewSet, PickBatchViewSet, RMAViewSet, TransactionLogViewSet, 
+    CycleCountViewSet, ItemViewSet, InventoryViewSet, LocationViewSet, 
+    PickBatchViewSet, RMAViewSet, TransactionLogViewSet, 
     OrderViewSet, SupplierViewSet, PurchaseOrderViewSet,
-    LocationConfigurationViewSet, ReplenishmentTaskViewSet, # Explicit imports
-    dashboard_stats, current_user
+    LocationConfigurationViewSet, ReplenishmentTaskViewSet,
+    UserViewSet, GroupViewSet, # <--- Added
+    dashboard_stats, current_user, user_performance_stats # <--- Added
 )
 
 router = DefaultRouter()
+router.register(r'users', UserViewSet)   # <--- New Route
+router.register(r'groups', GroupViewSet) # <--- New Route
 router.register(r'items', ItemViewSet)
 router.register(r'inventory', InventoryViewSet)
 router.register(r'history', TransactionLogViewSet)
@@ -25,5 +28,6 @@ router.register(r'batches', PickBatchViewSet)
 urlpatterns = [
     path('', include(router.urls)),
     path('dashboard/stats/', dashboard_stats),
+    path('dashboard/users/', user_performance_stats), # <--- New Route
     path('me/', current_user)
 ]
