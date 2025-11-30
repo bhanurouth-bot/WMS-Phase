@@ -3212,7 +3212,8 @@ export default function App() {
                             {/* EXPORT BUTTONS */}
                             <div className="flex bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
                                 <a 
-                                    href={`${API_URL}/inventory/export/?format=csv`} 
+                                    // CHANGED: ?format=csv -> ?export_format=csv
+                                    href={`${API_URL}/inventory/export/?export_format=csv`} 
                                     target="_blank" 
                                     rel="noreferrer" 
                                     className="px-3 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 border-r border-slate-200 dark:border-slate-700 flex items-center gap-1 transition-colors"
@@ -3220,7 +3221,8 @@ export default function App() {
                                     <FileText size={14}/> CSV
                                 </a>
                                 <a 
-                                    href={`${API_URL}/inventory/export/?format=pdf`} 
+                                    // CHANGED: ?format=pdf -> ?export_format=pdf
+                                    href={`${API_URL}/inventory/export/?export_format=pdf`} 
                                     target="_blank" 
                                     rel="noreferrer" 
                                     className="px-3 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center gap-1 transition-colors"

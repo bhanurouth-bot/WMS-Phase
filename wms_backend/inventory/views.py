@@ -12,11 +12,10 @@ from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth.models import User, Group
 
 import csv
-from django.http import HttpResponse
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
 
 # Services & Tasks
 from .services import InventoryService
@@ -154,10 +153,12 @@ class InventoryViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def export(self, request):
-        format_type = request.query_params.get('format', 'csv')
+        # Define the variable 'export_type'
+        export_type = request.query_params.get('export_format', 'csv')
         queryset = self.filter_queryset(self.get_queryset())
 
-        if format_type == 'csv':
+        # Check 'export_type' for CSV
+        if export_type == 'csv':
             response = HttpResponse(content_type='text/csv')
             response['Content-Disposition'] = 'attachment; filename="inventory.csv"'
             writer = csv.writer(response)
@@ -169,7 +170,8 @@ class InventoryViewSet(viewsets.ModelViewSet):
                 ])
             return response
 
-        elif format_type == 'pdf':
+        # Check 'export_type' for PDF (Fix: ensure this matches the variable defined above)
+        elif export_type == 'pdf':
             response = HttpResponse(content_type='application/pdf')
             response['Content-Disposition'] = 'attachment; filename="inventory.pdf"'
             
