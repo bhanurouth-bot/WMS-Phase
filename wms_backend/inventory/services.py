@@ -638,25 +638,38 @@ class InventoryService:
         return {"success": True, "tasks_created": tasks_created}
 
     @staticmethod
-    def complete_replenishment(task_id):
-        with transaction.atomic():
-            try:
-                task = ReplenishmentTask.objects.select_for_update().get(id=task_id)
-            except ReplenishmentTask.DoesNotExist:
-                return {"error": "Task not found"}
-            
-            if task.status == 'COMPLETED':
-                return {"error": "Already completed"}
+    def generate_replenishment_tasks():
+        configs = LocationConfiguration.objects.filter(is_pick_face=True, item__isnull=False)
+        tasks_created = 0
 
-            move_res = InventoryService.move_item(task.item.sku, task.source_location, task.dest_location, task.qty_to_move)
+        for config in configs:
+            current_inv = Inventory.objects.filter(location_code=config.location_code, item=config.item, status='AVAILABLE').aggregate(total=Sum('quantity'))['total'] or 0
             
-            if "error" in move_res:
-                return move_res
+            if current_inv < config.min_qty:
+                qty_needed = config.max_qty - current_inv
+                
+                # UPDATED: Sort by Expiry Date (FEFO) then Quantity
+                reserve_stock = Inventory.objects.filter(item=config.item, quantity__gt=0, status='AVAILABLE')\
+                                                 .exclude(location_code=config.location_code)\
+                                                 .order_by('expiry_date', '-quantity').first()
+                
+                if reserve_stock:
+                    # ... (rest of logic remains same)
+                    if ReplenishmentTask.objects.filter(status='PENDING', dest_location=config.location_code, item=config.item).exists():
+                        continue
 
-            task.status = 'COMPLETED'
-            task.save()
-            return {"success": True}
+                    to_move = min(qty_needed, reserve_stock.quantity)
+                    
+                    ReplenishmentTask.objects.create(
+                        item=config.item,
+                        source_location=reserve_stock.location_code,
+                        dest_location=config.location_code,
+                        qty_to_move=to_move
+                    )
+                    tasks_created += 1
         
+        return {"success": True, "tasks_created": tasks_created}
+      
     @staticmethod
     def create_cluster_batch(order_ids, user=None):
         with transaction.atomic():

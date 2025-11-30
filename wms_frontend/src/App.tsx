@@ -222,6 +222,7 @@ const LabelModal = ({ zpl, onClose }: { zpl: string, onClose: () => void }) => {
   );
 };
 
+
 const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -488,40 +489,32 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         const targetSku = activeItem.sku || activeItem.item_sku;
         const targetLoc = activeItem.location || activeItem.source_location;
 
-        // 1. Safety Check: Ensure token exists before making request
         if (!token) {
-            console.error("UniversalScanner: Token is missing!");
             alert("Authentication error. Please re-login.");
             return;
         }
 
         try {
             const res = await fetch(`${API_URL}/inventory/?item__sku=${targetSku}&location_code=${targetLoc}`, {
-                headers: { 
-                    'Authorization': `Token ${token}`, 
-                    'Content-Type': 'application/json'
-                }
+                headers: { 'Authorization': `Token ${token}` }
             });
-
-            // 2. Handle Session Expiry (401 Unauthorized)
-            if (res.status === 401) {
-                alert("Session Expired. Please re-login.");
-                return;
-            }
-
             const data = await res.json();
-            
-            // FIX: Handle Django Pagination (data.results)
             const invData: InventoryItem[] = Array.isArray(data) ? data : (data.results || []);
 
+            // Sort lots (FEFO)
             const sorted = invData.sort((a, b) => {
                 if (!a.expiry_date) return 1;
                 if (!b.expiry_date) return -1;
                 return new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime();
             });
             
-            setAvailableLots(sorted);
-            setStep('LOT_SELECT');
+            if (sorted.length === 0 && mode === 'CYCLE') {
+                 // If counting an empty bin, skip lot select
+                 setStep('QTY');
+            } else {
+                 setAvailableLots(sorted);
+                 setStep('LOT_SELECT');
+            }
         } catch (e) {
             console.error(e);
             alert("Error fetching lots");
@@ -556,7 +549,7 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             detectedSku = valUpper;
         }
 
-        // --- 2. VALIDATE LOCATION SCAN (Case Insensitive) ---
+        // --- 2. VALIDATE LOCATION SCAN ---
         if ((step === 'LOC' || step === 'DEST') && locations && !gs1) {
             const isValidLoc = locations.some((l:any) => l.location_code.toUpperCase() === valUpper);
             if (!isValidLoc && mode !== 'MOVE') { 
@@ -566,7 +559,7 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             }
         }
 
-        // --- MOVE MODE ---
+        // --- MOVE MODE LOGIC ---
         if (mode === 'MOVE') {
             if (step === 'LOC') { setMoveSource(val); setStep('SKU'); playSound('success'); }
             else if (step === 'SKU') { setMoveSku(val); setStep('QTY'); playSound('success'); }
@@ -578,36 +571,23 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             return;
         }
 
-        // --- AUTO-SELECT TASK (If not active) ---
+        // --- AUTO-SELECT TASK ---
         if (!activeItem) {
             const pending = getPendingList();
             
-            const matchSku = pending.find((t:any) => {
-                const tSku = (t.sku || t.item_sku || '').toUpperCase();
-                return tSku === detectedSku; 
-            });
-
+            const matchSku = pending.find((t:any) => (t.sku || t.item_sku || '').toUpperCase() === detectedSku);
             if (matchSku) {
                 setActiveItem(matchSku);
-                
                 if (gs1) {
                     if (gs1.lot) matchSku._lot = gs1.lot;
                     if (gs1.expiry) matchSku._expiry = gs1.expiry;
-                    alert(`GS1 Detected:\nLot: ${gs1.lot || 'N/A'}\nExp: ${gs1.expiry || 'N/A'}`);
                 }
-
-                if (mode === 'RECEIVE') setStep('LOC'); 
-                else setStep('LOC'); 
-                
+                setStep('LOC'); 
                 playSound('success');
                 return;
             }
 
-            const matchLoc = pending.find((t:any) => {
-                const tLoc = (t.location || t.source_location || '').toUpperCase();
-                return tLoc === valUpper;
-            });
-
+            const matchLoc = pending.find((t:any) => (t.location || t.source_location || '').toUpperCase() === valUpper);
             if (matchLoc) {
                 setActiveItem(matchLoc);
                 setStep('SKU');
@@ -620,15 +600,14 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             return;
         }
 
+        // --- ACTIVE TASK FLOW ---
         const rawLoc = mode === 'REPLENISH' ? activeItem.source_location : activeItem.location;
         const targetLoc = (rawLoc || '').toUpperCase();
         const targetSku = (activeItem.sku || activeItem.item_sku || '').toUpperCase();
-        
-        const rawDest = activeItem.dest_location || '';
-        const targetDest = rawDest.toUpperCase();
+        const targetDest = (activeItem.dest_location || '').toUpperCase();
 
         if (step === 'LOC') {
-            if (valUpper === targetLoc || (mode === 'RECEIVE')) {
+            if (valUpper === targetLoc || mode === 'RECEIVE') {
                 if (mode === 'RECEIVE') {
                     activeItem._tempLoc = valUpper; 
                     setStep('QTY'); 
@@ -647,7 +626,6 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
                     if (gs1.lot) activeItem._lot = gs1.lot;
                     if (gs1.expiry) activeItem._expiry = gs1.expiry;
                 }
-
                 if (mode === 'RECEIVE') setStep('LOC');
                 else setStep('QTY'); 
                 playSound('success');
@@ -656,14 +634,44 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
                  alert(`WRONG SKU! Expected: ${targetSku}`);
             }
         }
+        // --- NEW: LOT SELECTION BY SCANNING ---
+        else if (step === 'LOT_SELECT') {
+            const scannedLot = valUpper;
+            const match = availableLots.find(l => (l.lot_number || 'N/A').toUpperCase() === scannedLot || (scannedLot === '' && !l.lot_number));
+            
+            if (match) {
+                // Found it in the list - Auto select and verify
+                setSelectedLot(match.lot_number || 'N/A');
+                // We can assume verification is implicit if they scanned it here
+                setStep(mode === 'REPLENISH' ? 'DEST' : 'QTY');
+                playSound('success');
+            } else {
+                // Not in list
+                if (mode === 'CYCLE') {
+                    if(confirm(`Lot "${scannedLot}" not found in system. Add it to count?`)) {
+                        setSelectedLot(scannedLot);
+                        setStep('QTY');
+                        playSound('success');
+                    }
+                } else {
+                    playSound('error');
+                    alert(`WRONG LOT! Scanned "${scannedLot}" not found in this bin.`);
+                }
+            }
+        }
         else if (step === 'LOT_VERIFY') {
             const targetLot = (selectedLot || '').toUpperCase();
-            if (valUpper === targetLot) {
+            const scannedLot = valUpper || 'N/A';
+            
+            // Relaxed Check: Matches if strings match OR if both are effectively empty
+            const isMatch = valUpper === targetLot || (targetLot === 'N/A' && (valUpper === '' || valUpper === 'N/A'));
+
+            if (isMatch) {
                 setStep(mode === 'REPLENISH' ? 'DEST' : 'QTY');
                 playSound('success');
             } else {
                 playSound('error');
-                alert(`WRONG LOT! Scanned: ${valUpper}, Expected: ${targetLot}`);
+                alert(`WRONG LOT! Scanned: "${valUpper}", Expected: "${targetLot}"`);
             }
         }
         else if (step === 'DEST') {
@@ -675,12 +683,13 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
                  playSound('error');
                  alert(`WRONG DEST! Expected: ${targetDest}`);
              }
-        } 
-        else if (step === 'LOT') {
+        }
+        else if (step === 'LOT') { // For Receiving
             activeItem._lot = val;
             setStep('EXPIRY');
             playSound('success');
-        } else if (step === 'EXPIRY') {
+        } 
+        else if (step === 'EXPIRY') { // For Receiving
             onUpdate(activeItem, activeItem._qty, activeItem._tempLoc, activeItem._lot, val);
             resetCycle();
             playSound('success');
@@ -696,13 +705,7 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
             activeItem._qty = qty;
             
             if (mode === 'RECEIVE') {
-                onUpdate(
-                    activeItem, 
-                    qty, 
-                    activeItem._tempLoc, 
-                    activeItem._lot || selectedLot, 
-                    activeItem._expiry
-                );
+                onUpdate(activeItem, qty, activeItem._tempLoc, activeItem._lot || selectedLot, activeItem._expiry);
             } else {
                 onUpdate(activeItem, qty, null, activeItem._lot || selectedLot); 
             }
@@ -797,14 +800,11 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
                                     showOnlyTargetZone={true}
                                     onBinClick={handleMapClick}
                                 />
-                                <div className="absolute bottom-4 left-0 right-0 text-center text-xs text-slate-400 bg-black/50 p-1">
-                                    Click highlighted bin to confirm arrival
-                                </div>
                             </div>
                         ) : step === 'LOT_SELECT' ? (
                             <div className="p-6 h-full overflow-y-auto">
-                                <h3 className="text-center text-xl font-bold mb-4">Select Lot (FEFO)</h3>
-                                {availableLots.length === 0 && <div className="text-center text-slate-400">No lots found in this bin.</div>}
+                                <h3 className="text-center text-xl font-bold mb-4">Select or Scan Lot</h3>
+                                {availableLots.length === 0 && <div className="text-center text-slate-400">No lots found. Scan one to add.</div>}
                                 <div className="space-y-3">
                                     {availableLots.map((lot, idx) => (
                                         <button 
@@ -855,7 +855,7 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
                                 onChange={e => setManualInput(e.target.value)}
                                 type={step === 'QTY' ? 'number' : 'text'}
                                 className="w-full bg-black/50 border border-white/20 rounded-2xl py-4 pl-12 pr-4 text-xl font-mono text-white placeholder-slate-600 outline-none focus:border-blue-500"
-                                placeholder={step === 'QTY' ? "Enter Qty..." : step === 'LOC' ? "Scan Bin..." : step === 'LOT_VERIFY' ? "Scan Lot..." : "Scan..."}
+                                placeholder={step === 'QTY' ? "Enter Qty..." : step === 'LOC' ? "Scan Bin..." : step === 'LOT_SELECT' ? "Scan Lot to Select..." : "Scan..."}
                             />
                         </div>
                         <div className="grid grid-cols-2 gap-4 mt-4">
@@ -864,11 +864,6 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
                                 {step === 'QTY' ? 'Confirm' : 'Enter'}
                             </button>
                         </div>
-                        {mode === 'WAVE' && step === 'LOC' && (
-                            <button type="button" onClick={handleShortPick} className="mt-3 w-full text-red-400 text-xs font-bold py-2 hover:text-red-300">
-                                Cannot find item? (Short Pick)
-                            </button>
-                        )}
                     </form>
                 </div>
             )}
@@ -1169,6 +1164,289 @@ const ToastContainer = ({ toasts, removeToast }: any) => (
   </div>
 );
 
+const CreatePOModal = ({ onClose, onSubmit, suppliers, items }: any) => {
+    const [supplierId, setSupplierId] = useState('');
+    const [lines, setLines] = useState<{sku: string, qty: number, lot: string, expiry: string}[]>([{sku: '', qty: 1, lot: '', expiry: ''}]);
+
+    const addLine = () => setLines([...lines, {sku: '', qty: 1, lot: '', expiry: ''}]);
+    const removeLine = (idx: number) => setLines(lines.filter((_, i) => i !== idx));
+    
+    const updateLine = (idx: number, field: string, value: any) => {
+        const newLines = [...lines];
+        newLines[idx] = { ...newLines[idx], [field]: value };
+        setLines(newLines);
+    };
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!supplierId) return alert("Please select a supplier");
+        
+        const validLines = lines.map(l => ({
+            sku: l.sku,
+            qty: Number(l.qty),
+            received: 0,
+            // Pass lot/expiry as data to be stored in the PO line JSON
+            lot_number: l.lot,
+            expiry_date: l.expiry
+        })).filter(l => l.sku && l.qty > 0);
+
+        onSubmit({
+            supplier: parseInt(supplierId),
+            lines: validLines
+        });
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in">
+            <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl w-full max-w-4xl p-8 shadow-2xl border border-white/40 dark:border-white/10">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                        <ShoppingCart size={24} className="text-blue-600"/> New Purchase Order
+                    </h2>
+                    <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600 dark:hover:text-white"/></button>
+                </div>
+                
+                <form onSubmit={handleSubmit} className="space-y-6">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Supplier</label>
+                        <select 
+                            value={supplierId} 
+                            onChange={e => setSupplierId(e.target.value)}
+                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 ring-blue-500/20 font-bold text-slate-700 dark:text-white"
+                            required
+                        >
+                            <option value="">Select Vendor...</option>
+                            {suppliers.map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 macos-scrollbar">
+                        <div className="grid grid-cols-12 gap-2 text-xs font-bold text-slate-500 uppercase px-2">
+                            <div className="col-span-4">Item</div>
+                            <div className="col-span-2">Qty</div>
+                            <div className="col-span-3">Expected Lot</div>
+                            <div className="col-span-2">Expiry</div>
+                            <div className="col-span-1"></div>
+                        </div>
+                        {lines.map((line, i) => (
+                            <div key={i} className="grid grid-cols-12 gap-2 items-center bg-slate-50/50 dark:bg-slate-800/50 p-2 rounded-lg border border-slate-100 dark:border-slate-700">
+                                <div className="col-span-4">
+                                    <select 
+                                        value={line.sku} onChange={e => updateLine(i, 'sku', e.target.value)}
+                                        className="w-full bg-transparent outline-none text-sm dark:text-white" required
+                                    >
+                                        <option value="">Select Item...</option>
+                                        {items.map((item: any) => <option key={item.id} value={item.sku}>{item.sku} - {item.name}</option>)}
+                                    </select>
+                                </div>
+                                <div className="col-span-2">
+                                    <input type="number" min="1" value={line.qty} onChange={e => updateLine(i, 'qty', e.target.value)} className="w-full bg-transparent outline-none text-sm font-mono dark:text-white" placeholder="1" />
+                                </div>
+                                <div className="col-span-3">
+                                    <input value={line.lot} onChange={e => updateLine(i, 'lot', e.target.value)} className="w-full bg-transparent outline-none text-sm dark:text-white" placeholder="Optional Lot" />
+                                </div>
+                                <div className="col-span-2">
+                                    <input type="date" value={line.expiry} onChange={e => updateLine(i, 'expiry', e.target.value)} className="w-full bg-transparent outline-none text-sm dark:text-white" />
+                                </div>
+                                <div className="col-span-1 text-right">
+                                    <button type="button" onClick={() => removeLine(i)} className="text-red-400 hover:text-red-600"><X size={16}/></button>
+                                </div>
+                            </div>
+                        ))}
+                        <button type="button" onClick={addLine} className="w-full py-2 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-lg text-slate-400 hover:text-blue-500 hover:border-blue-300 transition-colors text-sm font-bold">+ Add Line</button>
+                    </div>
+
+                    <div className="pt-4 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-3">
+                        <button type="button" onClick={onClose} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">Cancel</button>
+                        <button type="submit" className="px-6 py-2 bg-blue-600 text-white font-bold rounded-lg shadow-lg hover:bg-blue-700">Create Order</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+const CreateMoveModal = ({ onClose, onSubmit, items, locations, inventory }: any) => {
+    const [selectedSku, setSelectedSku] = useState('');
+    const [sourceBin, setSourceBin] = useState('');
+    const [destBin, setDestBin] = useState('');
+    const [qty, setQty] = useState(1);
+
+    // Logic: Only show bins that actually contain the selected SKU
+    const availableSourceBins = inventory.filter((i: any) => i.item_sku === selectedSku && i.quantity > 0);
+    
+    // Logic: Prevent moving to the same bin
+    const availableDestBins = locations.filter((l: any) => l.location_code !== sourceBin);
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedSku || !sourceBin || !destBin) {
+            return alert("Please select Item, Source, and Destination.");
+        }
+        
+        // Validate Qty
+        const sourceInv = availableSourceBins.find((i:any) => i.location_code === sourceBin);
+        if (sourceInv && qty > sourceInv.quantity) {
+            return alert(`Error: Only ${sourceInv.quantity} units available in ${sourceBin}.`);
+        }
+
+        onSubmit({ 
+            sku: selectedSku, 
+            source_location: sourceBin, 
+            dest_location: destBin, 
+            quantity: qty 
+        });
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in">
+            <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-8 shadow-2xl border border-white/40 dark:border-white/10">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-bold flex items-center gap-2 text-slate-800 dark:text-white">
+                        <ArrowRightLeft className="text-blue-600"/> Internal Move
+                    </h2>
+                    <button onClick={onClose}><X size={20} className="text-slate-400 hover:text-slate-600 dark:hover:text-white"/></button>
+                </div>
+                
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    {/* 1. Select Item */}
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Item to Move</label>
+                        <select 
+                            value={selectedSku} 
+                            onChange={e => { setSelectedSku(e.target.value); setSourceBin(''); }} 
+                            className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 outline-none focus:ring-2 ring-blue-500/20" 
+                            required
+                        >
+                            <option value="">Select Item...</option>
+                            {items.map((i: any) => <option key={i.id} value={i.sku}>{i.sku} - {i.name}</option>)}
+                        </select>
+                    </div>
+
+                    {/* 2. Select Source (Dependent on Item) */}
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">From (Source Bin)</label>
+                        <select 
+                            value={sourceBin} 
+                            onChange={e => setSourceBin(e.target.value)} 
+                            className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 outline-none focus:ring-2 ring-blue-500/20 disabled:opacity-50" 
+                            required 
+                            disabled={!selectedSku}
+                        >
+                            <option value="">{selectedSku ? 'Select Source...' : 'Select Item First'}</option>
+                            {availableSourceBins.map((inv: any) => (
+                                <option key={inv.id} value={inv.location_code}>
+                                    {inv.location_code} (Avail: {inv.quantity}) {inv.lot_number ? `[Lot: ${inv.lot_number}]` : ''}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* 3. Select Destination */}
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">To (Destination Bin)</label>
+                        <select 
+                            value={destBin} 
+                            onChange={e => setDestBin(e.target.value)} 
+                            className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 outline-none focus:ring-2 ring-blue-500/20" 
+                            required
+                        >
+                            <option value="">Select Destination...</option>
+                            {availableDestBins.map((l: any) => (
+                                <option key={l.id} value={l.location_code}>{l.location_code} ({l.location_type})</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* 4. Quantity */}
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Quantity</label>
+                        <input 
+                            type="number" 
+                            min="1" 
+                            value={qty} 
+                            onChange={e => setQty(parseInt(e.target.value))} 
+                            className="w-full p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 outline-none focus:ring-2 ring-blue-500/20" 
+                            required 
+                        />
+                    </div>
+
+                    <div className="flex justify-end gap-2 mt-6">
+                        <button type="button" onClick={onClose} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors">Cancel</button>
+                        <button type="submit" className="px-6 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 shadow-lg transition-all">Confirm Move</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+const CreateReplenishModal = ({ onClose, onSubmit, items, locations, inventory }: any) => {
+    const [selectedSku, setSelectedSku] = useState('');
+    const [sourceBin, setSourceBin] = useState('');
+    const [destBin, setDestBin] = useState('');
+    const [qty, setQty] = useState(1);
+
+    // Logic: Get bins that have this item
+    const availableSourceBins = inventory.filter((i: any) => i.item_sku === selectedSku && i.quantity > 0);
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedSku || !sourceBin || !destBin) return alert("Please select all fields.");
+        onSubmit({ sku: selectedSku, source_location: sourceBin, dest_location: destBin, quantity: qty });
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in">
+            <div className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl w-full max-w-md p-8 shadow-2xl border border-white/40 dark:border-white/10">
+                <h2 className="text-xl font-bold mb-6 flex items-center gap-2 text-slate-800 dark:text-white">
+                    <ClipboardList className="text-purple-600"/> Manual Replenishment
+                </h2>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase">Item</label>
+                        <select value={selectedSku} onChange={e => {setSelectedSku(e.target.value); setSourceBin('');}} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 dark:text-white mt-1 outline-none" required>
+                            <option value="">Select SKU...</option>
+                            {items.map((i: any) => <option key={i.id} value={i.sku}>{i.sku}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase">Source Bin (Available Stock)</label>
+                        <select value={sourceBin} onChange={e => setSourceBin(e.target.value)} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 dark:text-white mt-1 outline-none" required disabled={!selectedSku}>
+                            <option value="">Select Source...</option>
+                            {availableSourceBins.map((inv: any) => (
+                                <option key={inv.id} value={inv.location_code}>{inv.location_code} (Qty: {inv.quantity})</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase">Destination (Any Bin)</label>
+                        <select value={destBin} onChange={e => setDestBin(e.target.value)} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 dark:text-white mt-1 outline-none" required>
+                            <option value="">Select Dest...</option>
+                            {/* Showing ALL locations, sorted by code */}
+                            {locations.sort((a:any,b:any)=>a.location_code.localeCompare(b.location_code)).map((l: any) => (
+                                <option key={l.id} value={l.location_code}>
+                                    {l.location_code} [{l.location_type}]
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 uppercase">Quantity</label>
+                        <input type="number" min="1" value={qty} onChange={e => setQty(parseInt(e.target.value))} className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 dark:text-white mt-1 outline-none" required />
+                    </div>
+                    <div className="flex justify-end gap-2 mt-4">
+                        <button type="button" onClick={onClose} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">Cancel</button>
+                        <button type="submit" className="px-6 py-2 bg-purple-600 text-white font-bold rounded-lg hover:bg-purple-700">Create Task</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
 // --- MAIN APP ---
 
 export default function App() {
@@ -1179,6 +1457,39 @@ export default function App() {
   const [tabHistory, setTabHistory] = useState<string[]>([]);
   const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE' | 'RECEIVE' | 'MOVE' | 'REPLENISH'>('IDLE');
   const [toasts, setToasts] = useState<any[]>([]);
+
+  // --- STATE ---
+  const [showPOModal, setShowPOModal] = useState(false);
+  const [showMoveModal, setShowMoveModal] = useState(false);
+
+  // --- HANDLER ---
+  const handleCreatePO = async (data: any) => {
+      try {
+          // Generate a random PO number for now (Backend usually handles this, but we send it for the mock)
+          const poPayload = {
+              ...data,
+              po_number: `PO-${new Date().getFullYear()}${Math.floor(Math.random() * 10000)}`,
+              status: 'DRAFT'
+          };
+
+          const res = await fetch(`${API_URL}/purchase-orders/`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${token}` },
+              body: JSON.stringify(poPayload)
+          });
+
+          if (res.ok) {
+              addToast("Purchase Order Created", 'success');
+              setShowPOModal(false);
+              fetchAll();
+          } else {
+              const err = await res.json();
+              addToast("Error: " + JSON.stringify(err), 'error');
+          }
+      } catch (e) {
+          addToast("Network Error", 'error');
+      }
+  };
 
   const addToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
       const id = Date.now();
@@ -1248,6 +1559,7 @@ export default function App() {
   const [currentZpl, setCurrentZpl] = useState('');
   const [showUserModal, setShowUserModal] = useState(false); // [NEW]
   const [editingUser, setEditingUser] = useState<UserData | null>(null); // [NEW]
+  const [showReplenishModal, setShowReplenishModal] = useState(false);
 
   const handleLogin = (newToken: string) => {
     setToken(newToken);
@@ -1849,6 +2161,10 @@ export default function App() {
       addToast("Label Template Saved", 'success');
   };
 
+    // function setShowReplenishModal(arg0: boolean): void {
+    //     throw new Error('Function not implemented.');
+    // }
+
   return (
     <div className="h-screen w-screen overflow-hidden flex flex-col items-center justify-center p-6 text-slate-800 font-sans selection:bg-blue-200 dark:text-slate-100 dark:selection:bg-blue-900 transition-colors duration-500">
        <style>{`
@@ -1911,6 +2227,9 @@ export default function App() {
       {showLocationModal && <CreateLocationModal onClose={()=>setShowLocationModal(false)} onSubmit={handleCreateLocation} />}
       {showQuickReceive && <QuickReceiveModal items={items} locations={locations} onClose={()=>setShowQuickReceive(false)} onSubmit={handleQuickReceive} />}
       {showUserModal && <ManageUserModal user={editingUser} groups={groups} onClose={()=>{setShowUserModal(false); setEditingUser(null);}} onSubmit={handleSaveUser}/>}
+      {showPOModal && <CreatePOModal suppliers={suppliers} items={items} onClose={()=>setShowPOModal(false)} onSubmit={handleCreatePO} />}
+      {showReplenishModal && <CreateReplenishModal items={items} locations={locations} inventory={inventory} onClose={()=>setShowReplenishModal(false)} onSubmit={handleMoveSubmit}/>}
+      {showMoveModal && <CreateMoveModal items={items} locations={locations} inventory={inventory} onClose={()=>setShowMoveModal(false)} onSubmit={handleMoveSubmit} />}
 
       <div className="w-full max-w-[1400px] h-[85vh] bg-white/60 dark:bg-slate-900/60 backdrop-blur-2xl rounded-[2rem] shadow-2xl border border-white/40 dark:border-white/10 flex flex-col relative overflow-hidden animate-in fade-in zoom-in duration-500 z-10">
         
@@ -2248,21 +2567,63 @@ export default function App() {
             {activeTab === 'Moves' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
                     <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Internal Moves</h2>
-                        <button onClick={()=>setScannerMode('MOVE')} className="bg-blue-600 text-white px-6 py-2 rounded-lg shadow-lg font-bold flex items-center gap-2"><ArrowRightLeft size={18}/> Start Transfer</button>
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Internal Moves</h2>
+                            <p className="text-slate-500 dark:text-slate-400 text-sm">Transfer stock between bins, consolidation, or damage control.</p>
+                        </div>
+                        <div className="flex gap-2">
+                            {/* NEW: Manual Move Button */}
+                            <button 
+                                onClick={() => setShowMoveModal(true)} 
+                                className="bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 px-4 py-2 rounded-lg font-bold text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition-all flex items-center gap-2"
+                            >
+                                <Plus size={16}/> Quick Move
+                            </button>
+                            
+                            {/* Scanner Button */}
+                            <button 
+                                onClick={() => setScannerMode('MOVE')} 
+                                className="bg-blue-600 text-white px-6 py-2 rounded-lg shadow-lg font-bold flex items-center gap-2 hover:bg-blue-700 transition-all"
+                            >
+                                <Scan size={16}/> Scanner Mode
+                            </button>
+                        </div>
                     </div>
+
                     <GlassCard noPad className="overflow-hidden">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10"><tr><th className="p-4">Time</th><th className="p-4">Item</th><th className="p-4">From/To</th><th className="p-4 text-right">Qty</th></tr></thead>
+                            <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10">
+                                <tr>
+                                    <th className="p-4">Time</th>
+                                    <th className="p-4">Item</th>
+                                    <th className="p-4">From / To</th>
+                                    <th className="p-4">User</th>
+                                    <th className="p-4 text-right">Qty</th>
+                                </tr>
+                            </thead>
                             <tbody className="divide-y divide-black/5 dark:divide-white/10">
-                                {history.filter(h=>h.action==='MOVE').map(h => (
+                                {history.filter(h => h.action === 'MOVE').map(h => (
                                     <tr key={h.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
                                         <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{new Date(h.timestamp).toLocaleString()}</td>
                                         <td className="p-4 font-medium text-slate-700 dark:text-slate-200">{h.sku_snapshot}</td>
-                                        <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-300">{h.location_snapshot}</td>
+                                        <td className="p-4">
+                                            <div className="flex items-center gap-2 font-mono text-xs text-slate-600 dark:text-slate-300">
+                                                <span className="bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 px-2 py-0.5 rounded">{h.location_snapshot.split('>')[0].trim()}</span>
+                                                <ArrowRightCircle size={12} className="text-slate-400"/>
+                                                <span className="bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 px-2 py-0.5 rounded">{h.location_snapshot.split('>')[1]?.trim() || '?'}</span>
+                                            </div>
+                                        </td>
+                                        <td className="p-4 text-xs text-slate-500">Admin</td> 
                                         <td className="p-4 text-right font-bold text-slate-700 dark:text-white">{h.quantity_change}</td>
                                     </tr>
                                 ))}
+                                {history.filter(h => h.action === 'MOVE').length === 0 && (
+                                    <tr>
+                                        <td colSpan={5} className="p-12 text-center text-slate-400 italic">
+                                            No internal moves recorded yet.
+                                        </td>
+                                    </tr>
+                                )}
                             </tbody>
                         </table>
                     </GlassCard>
@@ -2271,17 +2632,36 @@ export default function App() {
 
             {activeTab === 'Replenish' && (
                 <div className="max-w-6xl mx-auto grid grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4">
+                    {/* Left Column: Tasks List */}
                     <div className="col-span-2 space-y-6">
                         <div className="flex justify-between items-center">
-                            <div><h2 className="text-2xl font-bold text-slate-800 dark:text-white">Replenishment Tasks</h2><p className="text-slate-500 dark:text-slate-400 text-sm">Moves required to refill pick faces.</p></div>
+                            <div>
+                                <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Replenishment Tasks</h2>
+                                <p className="text-slate-500 dark:text-slate-400 text-sm">Moves required to refill pick faces.</p>
+                            </div>
                             <div className="flex gap-2">
-                                <button onClick={handleGenerateReplenish} className="bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-4 py-2 rounded-lg font-bold text-sm hover:bg-blue-200 dark:hover:bg-blue-900/60">Run Analysis</button>
-                                <button onClick={()=>setScannerMode('REPLENISH')} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-lg flex items-center gap-2"><Play size={16}/> Start Job</button>
+                                <button onClick={() => setShowReplenishModal(true)} className="bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-4 py-2 rounded-lg font-bold text-sm hover:bg-purple-200 dark:hover:bg-purple-900/50 flex items-center gap-2 border border-purple-200 dark:border-purple-800 transition-colors">
+                                    <Plus size={16}/> Manual Task
+                                </button>
+                                <button onClick={handleGenerateReplenish} className="bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-4 py-2 rounded-lg font-bold text-sm hover:bg-blue-200 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800 transition-colors">
+                                    Run Analysis
+                                </button>
+                                <button onClick={()=>setScannerMode('REPLENISH')} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-lg flex items-center gap-2 hover:bg-blue-700 transition-all">
+                                    <Play size={16}/> Start Job
+                                </button>
                             </div>
                         </div>
                         <GlassCard noPad className="overflow-hidden">
                             <table className="w-full text-left text-sm">
-                                <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10"><tr><th className="p-4">Status</th><th className="p-4">Item</th><th className="p-4">From (Reserve)</th><th className="p-4">To (Pick)</th><th className="p-4 text-right">Qty</th></tr></thead>
+                                <thead className="bg-slate-50/80 dark:bg-slate-800/80 text-[11px] uppercase text-slate-500 dark:text-slate-400 font-bold border-b border-black/5 dark:border-white/10">
+                                    <tr>
+                                        <th className="p-4">Status</th>
+                                        <th className="p-4">Item</th>
+                                        <th className="p-4">From (Reserve)</th>
+                                        <th className="p-4">To (Pick)</th>
+                                        <th className="p-4 text-right">Qty</th>
+                                    </tr>
+                                </thead>
                                 <tbody className="divide-y divide-black/5 dark:divide-white/10">
                                     {replenishTasks.map(t => (
                                         <tr key={t.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
@@ -2297,22 +2677,32 @@ export default function App() {
                             </table>
                         </GlassCard>
                     </div>
+
+                    {/* Right Column: Pick Face Rules (The Brain) */}
                     <div className="space-y-6">
-                        <h3 className="font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><Settings2 size={18}/> Pick Face Rules</h3>
+                        <div className="flex items-center justify-between">
+                            <h3 className="font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2"><Settings2 size={18}/> Pick Face Rules</h3>
+                            <span className="text-xs bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded text-slate-500">{binConfigs.length} Rules</span>
+                        </div>
+                        
                         <GlassCard className="p-4 space-y-4">
+                            {/* Add Rule Form */}
                             <form onSubmit={handleAddRule} className="space-y-3">
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Location</label>
-                                    <select name="loc" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required>
+                                    {/* FIXED: Removed filter so ALL bins show up */}
+                                    <select name="loc" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 outline-none" required>
                                         <option value="">Select Bin...</option>
-                                        {locations.filter(l => l.location_type === 'PICK').map(l => (
-                                            <option key={l.id} value={l.location_code}>{l.location_code} ({l.zone})</option>
+                                        {locations.sort((a:any,b:any)=>a.location_code.localeCompare(b.location_code)).map(l => (
+                                            <option key={l.id} value={l.location_code}>
+                                                {l.location_code} ({l.location_type})
+                                            </option>
                                         ))}
                                     </select>
                                 </div>
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Item</label>
-                                    <select name="item" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required>
+                                    <select name="item" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 outline-none" required>
                                         <option value="">Select SKU...</option>
                                         {items.map(i=><option key={i.id} value={i.id}>{i.sku}</option>)}
                                     </select>
@@ -2320,21 +2710,44 @@ export default function App() {
                                 <div className="flex gap-2">
                                     <div className="w-1/2">
                                         <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Min</label>
-                                        <input name="min" type="number" placeholder="Min" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required/>
+                                        <input name="min" type="number" placeholder="10" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 outline-none" required/>
                                     </div>
                                     <div className="w-1/2">
                                         <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Max</label>
-                                        <input name="max" type="number" placeholder="Max" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required/>
+                                        <input name="max" type="number" placeholder="100" className="w-full p-2 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1 outline-none" required/>
                                     </div>
                                 </div>
-                                <button className="w-full bg-slate-800 dark:bg-white dark:text-slate-900 text-white py-2 rounded-lg font-bold text-sm">Add Rule</button>
+                                <button className="w-full bg-slate-800 dark:bg-white dark:text-slate-900 text-white py-2 rounded-lg font-bold text-sm hover:bg-slate-700 dark:hover:bg-slate-200 transition-colors">Add Rule</button>
                             </form>
-                            <div className="border-t border-slate-200 dark:border-slate-700 pt-4 space-y-2">
+
+                            {/* Rules List */}
+                            <div className="border-t border-slate-200 dark:border-slate-700 pt-4 space-y-2 max-h-[300px] overflow-y-auto macos-scrollbar">
+                                {binConfigs.length === 0 && <div className="text-center text-xs text-slate-400 py-4">No rules set.<br/>Add one to enable auto-replenish.</div>}
                                 {binConfigs.map(c => (
-                                    <div key={c.id} className="flex justify-between text-xs bg-white/50 dark:bg-slate-800/50 p-2 rounded border border-white dark:border-slate-700 text-slate-700 dark:text-slate-300">
-                                        <span className="font-mono font-bold">{c.location_code}</span>
-                                        <span>{c.item_sku}</span>
-                                        <span className="text-slate-500 dark:text-slate-400">{c.min_qty} - {c.max_qty}</span>
+                                    <div key={c.id} className="flex justify-between items-center text-xs bg-white/50 dark:bg-slate-800/50 p-2 rounded border border-white dark:border-slate-700 text-slate-700 dark:text-slate-300 group">
+                                        <div>
+                                            <div className="font-mono font-bold text-blue-600 dark:text-blue-400">{c.location_code}</div>
+                                            <div className="font-medium">{c.item_sku}</div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-900 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700">
+                                                {c.min_qty} - {c.max_qty}
+                                            </span>
+                                            {/* Delete Button */}
+                                            <button 
+                                                onClick={async () => {
+                                                    if(!confirm("Remove this rule?")) return;
+                                                    await fetch(`${API_URL}/replenishment-rules/${c.id}/`, {
+                                                        method: 'DELETE', 
+                                                        headers: {'Authorization': `Token ${token}`}
+                                                    });
+                                                    fetchAll();
+                                                }}
+                                                className="text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            >
+                                                <X size={14}/>
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -2519,6 +2932,70 @@ export default function App() {
                 </div>
             )}
 
+            {/* LOTS TAB */}
+            {activeTab === 'Lots' && (
+                <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4">
+                    <div className="flex justify-between items-end mb-6">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Lot Management</h2>
+                            <p className="text-slate-500 text-sm">Track batch numbers, expiration dates, and stock aging.</p>
+                        </div>
+                        <div className="relative w-64">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <input 
+                                placeholder="Search Lot Number..." 
+                                onChange={(e) => {
+                                    // Client-side filtering
+                                    const term = e.target.value.toLowerCase();
+                                    const cards = document.querySelectorAll('.lot-card');
+                                    cards.forEach((c:any) => {
+                                        const text = c.innerText.toLowerCase();
+                                        c.style.display = text.includes(term) ? 'block' : 'none';
+                                    });
+                                }}
+                                className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm outline-none focus:ring-2 ring-blue-500/20 dark:text-white transition-all"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-6">
+                        {inventory.filter(i => i.lot_number).map(i => {
+                            const daysUntilExpiry = i.expiry_date ? Math.ceil((new Date(i.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : 999;
+                            const isExpiring = daysUntilExpiry < 30;
+                            
+                            return (
+                                <GlassCard key={i.id} className={`lot-card relative border-l-4 ${isExpiring ? 'border-l-red-500' : 'border-l-emerald-500'}`}>
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Batch / Lot</div>
+                                            <div className="text-xl font-mono font-bold text-slate-800 dark:text-white">{i.lot_number}</div>
+                                        </div>
+                                        <div className={`px-2 py-1 rounded text-[10px] font-bold ${isExpiring ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                                            {i.expiry_date ? `${daysUntilExpiry} Days Left` : 'No Expiry'}
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="mt-4 space-y-2">
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-slate-500">Item:</span>
+                                            <span className="font-bold dark:text-slate-200">{i.item_sku}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-slate-500">Location:</span>
+                                            <span className="font-mono bg-slate-100 dark:bg-slate-800 px-2 rounded text-slate-700 dark:text-slate-300">{i.location_code}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm border-t border-slate-100 dark:border-slate-700 pt-2 mt-2">
+                                            <span className="text-slate-500">Quantity:</span>
+                                            <span className="font-bold text-blue-600 dark:text-blue-400">{i.quantity} units</span>
+                                        </div>
+                                    </div>
+                                </GlassCard>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
             {activeTab === 'Orders' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
                     <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800 dark:text-white">Sales Orders</h2><button onClick={() => setShowOrderModal(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2"><Plus size={16}/> New Order</button></div>
@@ -2572,7 +3049,10 @@ export default function App() {
 
             {activeTab === 'Receiving' && (
                 <div className="max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4">
-                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800 dark:text-white">Inbound Receiving</h2><button onClick={handleAutoReplenish} className="bg-slate-700 dark:bg-slate-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2"><RefreshCw size={16}/> Auto-Replenish</button></div>
+                    <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold text-slate-800 dark:text-white">Inbound Receiving</h2><button 
+    onClick={() => setShowPOModal(true)} 
+    className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2"><Plus size={16}/> New Purchase Order
+</button></div>
                     <div className="grid grid-cols-2 gap-6">
                         {pos.map(p => (
                             <GlassCard key={p.id} className="hover:scale-[1.01] transition-transform">
@@ -2641,19 +3121,38 @@ export default function App() {
             )}
 
             {activeTab === 'Inventory' && (
-                <div className="max-w-6xl mx-auto">
+                <div className="max-w-6xl mx-auto animate-in fade-in">
                     <div className="flex justify-between items-center mb-6">
                         <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Inventory</h2>
                         <div className="flex gap-2">
-                            {/* CSV Import Button */}
+                            {/* EXPORT BUTTONS */}
+                            <div className="flex bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
+                                <a 
+                                    href={`${API_URL}/inventory/export/?format=csv`} 
+                                    target="_blank" 
+                                    rel="noreferrer" 
+                                    className="px-3 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 border-r border-slate-200 dark:border-slate-700 flex items-center gap-1 transition-colors"
+                                >
+                                    <FileText size={14}/> CSV
+                                </a>
+                                <a 
+                                    href={`${API_URL}/inventory/export/?format=pdf`} 
+                                    target="_blank" 
+                                    rel="noreferrer" 
+                                    className="px-3 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center gap-1 transition-colors"
+                                >
+                                    <Printer size={14}/> PDF
+                                </a>
+                            </div>
+
                             <div className="relative">
                                 <input type="file" onChange={handleFileUpload} className="hidden" id="csv-upload" accept=".csv"/>
-                                <label htmlFor="csv-upload" className="bg-slate-700 text-white px-4 py-2 rounded-lg cursor-pointer flex items-center gap-2 hover:bg-slate-600 transition-colors shadow-md font-bold text-sm">
-                                    <Upload size={16}/> Import CSV
+                                <label htmlFor="csv-upload" className="bg-slate-700 text-white px-4 py-2 rounded-lg cursor-pointer flex items-center gap-2 hover:bg-slate-600 transition-colors shadow-md font-bold text-sm h-full">
+                                    <Upload size={16}/> Import
                                 </label>
                             </div>
                             <button onClick={()=>setShowQuickReceive(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2">
-                                <ArrowDownCircle size={16}/> Quick Receive
+                                <ArrowDownCircle size={16}/> Receive
                             </button>
                         </div>
                     </div>
@@ -2665,7 +3164,6 @@ export default function App() {
                                     <th className="p-4">Location</th>
                                     <th className="p-4">Lot #</th>
                                     <th className="p-4">Expiry</th>
-                                    {/* [MODIFIED] Added Status Header */}
                                     <th className="p-4">Status</th>
                                     <th className="p-4 text-right">Qty</th>
                                 </tr>
@@ -2677,7 +3175,6 @@ export default function App() {
                                         <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-300">{i.location_code}</td>
                                         <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{i.lot_number || '-'}</td>
                                         <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{i.expiry_date || '-'}</td>
-                                        {/* [MODIFIED] Added Status Cell */}
                                         <td className="p-4">
                                             <span className={`px-2 py-1 rounded text-[10px] font-bold border ${
                                                 i.status === 'AVAILABLE' ? 'bg-green-100 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800' :
@@ -2695,6 +3192,7 @@ export default function App() {
                     </GlassCard>
                 </div>
             )}
+
 
             {activeTab === 'Scanner' && (
                 <div className="max-w-4xl mx-auto grid grid-cols-2 gap-6">
@@ -2816,6 +3314,7 @@ export default function App() {
              <DockItem icon={Box} label="Inventory" active={activeTab==='Inventory'} onClick={()=>navigate('Inventory')} />
              <DockItem icon={Layers} label="Waves" active={activeTab==='Waves'} onClick={()=>navigate('Waves')} />
              <DockItem icon={ArrowDownCircle} label="Receiving" active={activeTab==='Receiving'} onClick={()=>navigate('Receiving')} />
+             <DockItem icon={ClipboardList} label="Lots" active={activeTab==='Lots'} onClick={()=>navigate('Lots')} />
              <DockItem icon={ArrowRightLeft} label="Moves" active={activeTab==='Moves'} onClick={()=>navigate('Moves')} />
              <DockItem icon={ClipboardList} label="Replenish" active={activeTab==='Replenish'} onClick={()=>navigate('Replenish')} />
              <DockItem icon={PackageCheck} label="Packing" active={activeTab==='Packing'} onClick={()=>navigate('Packing')} />
@@ -2842,9 +3341,7 @@ export default function App() {
   );
 }
 
-function addToast(arg0: string, arg1: string) {
-    throw new Error('Function not implemented.');
-}
+
 function setShowLabel(arg0: boolean) {
     throw new Error('Function not implemented.');
 }
@@ -2852,4 +3349,14 @@ function setShowLabel(arg0: boolean) {
 function setCurrentZpl(zpl: string) {
     throw new Error('Function not implemented.');
 }
+// function addToast(arg0: string, arg1: string) {
+//     throw new Error('Function not implemented.');
+// }
+// function setShowLabel(arg0: boolean) {
+//     throw new Error('Function not implemented.');
+// }
+
+// function setCurrentZpl(zpl: string) {
+//     throw new Error('Function not implemented.');
+// }
 

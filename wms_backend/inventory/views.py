@@ -11,6 +11,13 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth.models import User, Group
 
+import csv
+from django.http import HttpResponse
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+
 # Services & Tasks
 from .services import InventoryService
 from .carrier import CarrierService
@@ -144,6 +151,60 @@ class InventoryViewSet(viewsets.ModelViewSet):
     def run_abc_analysis(self, request):
         result = InventoryService.perform_abc_analysis()
         return Response(result)
+    
+    @action(detail=False, methods=['get'])
+    def export(self, request):
+        format_type = request.query_params.get('format', 'csv')
+        queryset = self.filter_queryset(self.get_queryset())
+
+        if format_type == 'csv':
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = 'attachment; filename="inventory.csv"'
+            writer = csv.writer(response)
+            writer.writerow(['SKU', 'Name', 'Location', 'Qty', 'Status', 'Lot', 'Expiry'])
+            for inv in queryset:
+                writer.writerow([
+                    inv.item.sku, inv.item.name, inv.location_code, 
+                    inv.quantity, inv.status, inv.lot_number, inv.expiry_date
+                ])
+            return response
+
+        elif format_type == 'pdf':
+            response = HttpResponse(content_type='application/pdf')
+            response['Content-Disposition'] = 'attachment; filename="inventory.pdf"'
+            
+            doc = SimpleDocTemplate(response, pagesize=letter)
+            elements = []
+            styles = getSampleStyleSheet()
+            
+            elements.append(Paragraph("Inventory Report", styles['Title']))
+            
+            data = [['SKU', 'Location', 'Qty', 'Status', 'Lot']]
+            for inv in queryset:
+                data.append([
+                    inv.item.sku, inv.location_code, str(inv.quantity), 
+                    inv.status, inv.lot_number or '-'
+                ])
+            
+            table = Table(data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            elements.append(table)
+            
+            try:
+                doc.build(elements)
+            except Exception as e:
+                return Response({'error': f"PDF Generation Error: {str(e)}"}, status=500)
+                
+            return response
+            
+        return Response({'error': 'Invalid format'}, status=400)
 
 class TransactionLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = TransactionLog.objects.all().order_by('-timestamp')
