@@ -205,6 +205,79 @@ class InventoryViewSet(viewsets.ModelViewSet):
             return response
             
         return Response({'error': 'Invalid format'}, status=400)
+    
+    @staticmethod
+    def update_lot(inventory_id, new_lot_number, new_expiry_date=None, user=None):
+        with transaction.atomic():
+            try:
+                inv = Inventory.objects.select_for_update().get(id=inventory_id)
+            except Inventory.DoesNotExist:
+                return {"error": "Inventory not found"}
+
+            old_lot = inv.lot_number
+            clean_new_lot = new_lot_number.strip() if new_lot_number else None
+            
+            # If nothing changed, just update expiry
+            if old_lot == clean_new_lot:
+                 if inv.expiry_date != new_expiry_date:
+                     inv.expiry_date = new_expiry_date
+                     inv.save()
+                     return {"success": True, "message": "Expiry updated"}
+                 return {"success": True, "message": "No changes"}
+
+            # Check if target lot already exists in this location
+            target_inv = Inventory.objects.filter(
+                item=inv.item,
+                location_code=inv.location_code,
+                status=inv.status,
+                lot_number=clean_new_lot
+            ).exclude(id=inv.id).first()
+
+            if target_inv:
+                # MERGE LOGIC: Add qty to target, delete old record
+                target_inv.quantity += inv.quantity
+                target_inv.version += 1
+                if new_expiry_date:
+                    target_inv.expiry_date = new_expiry_date
+                target_inv.save()
+                
+                # Log the merge
+                TransactionLog.objects.create(
+                    action='ADJUST',
+                    sku_snapshot=inv.item.sku,
+                    location_snapshot=inv.location_code,
+                    quantity_change=inv.quantity,
+                    lot_snapshot=f"Merged {old_lot or 'N/A'} into {clean_new_lot}",
+                    user=user
+                )
+                inv.delete()
+            else:
+                # UPDATE IN PLACE
+                inv.lot_number = clean_new_lot
+                inv.expiry_date = new_expiry_date
+                inv.version += 1
+                inv.save()
+
+                TransactionLog.objects.create(
+                    action='ADJUST',
+                    sku_snapshot=inv.item.sku,
+                    location_snapshot=inv.location_code,
+                    quantity_change=0, 
+                    lot_snapshot=f"Changed {old_lot or 'N/A'} to {clean_new_lot}",
+                    user=user
+                )
+
+            return {"success": True}
+        
+    @action(detail=True, methods=['post'])
+    def assign_lot(self, request, pk=None):
+        new_lot = request.data.get('lot_number')
+        new_expiry = request.data.get('expiry_date')
+        result = InventoryService.update_lot(pk, new_lot, new_expiry, request.user)
+        if "error" in result: return Response(result, status=400)
+        return Response(result)
+    
+    
 
 class TransactionLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = TransactionLog.objects.all().order_by('-timestamp')

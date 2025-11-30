@@ -265,8 +265,13 @@ const QuickReceiveModal = ({ onClose, onSubmit, locations, items }: any) => {
                             <input name="quantity" type="number" min="1" defaultValue="1" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" required />
                         </div>
                         <div>
-                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Lot # (Optional)</label>
-                            <input name="lot" placeholder="L-123" className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" />
+                            <label className="text-[10px] font-bold text-red-500 uppercase">Lot # (Required)</label>
+                            <input 
+                                name="lot" 
+                                placeholder="Scan Lot..." 
+                                className="w-full p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm mt-1" 
+                                required // <--- Enforced here
+                            />
                         </div>
                     </div>
                     <div>
@@ -1180,12 +1185,17 @@ const CreatePOModal = ({ onClose, onSubmit, suppliers, items }: any) => {
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         if (!supplierId) return alert("Please select a supplier");
+
+        // VALIDATION: Check for missing lots
+        const missingLot = lines.some(l => !l.lot || l.lot.trim() === '');
+        if (missingLot) {
+            return alert("Error: Lot Number is REQUIRED for all items.");
+        }
         
         const validLines = lines.map(l => ({
             sku: l.sku,
             qty: Number(l.qty),
             received: 0,
-            // Pass lot/expiry as data to be stored in the PO line JSON
             lot_number: l.lot,
             expiry_date: l.expiry
         })).filter(l => l.sku && l.qty > 0);
@@ -1224,7 +1234,7 @@ const CreatePOModal = ({ onClose, onSubmit, suppliers, items }: any) => {
                         <div className="grid grid-cols-12 gap-2 text-xs font-bold text-slate-500 uppercase px-2">
                             <div className="col-span-4">Item</div>
                             <div className="col-span-2">Qty</div>
-                            <div className="col-span-3">Expected Lot</div>
+                            <div className="col-span-3 text-red-500">Lot # (Required)</div>
                             <div className="col-span-2">Expiry</div>
                             <div className="col-span-1"></div>
                         </div>
@@ -1243,7 +1253,13 @@ const CreatePOModal = ({ onClose, onSubmit, suppliers, items }: any) => {
                                     <input type="number" min="1" value={line.qty} onChange={e => updateLine(i, 'qty', e.target.value)} className="w-full bg-transparent outline-none text-sm font-mono dark:text-white" placeholder="1" />
                                 </div>
                                 <div className="col-span-3">
-                                    <input value={line.lot} onChange={e => updateLine(i, 'lot', e.target.value)} className="w-full bg-transparent outline-none text-sm dark:text-white" placeholder="Optional Lot" />
+                                    <input 
+                                        value={line.lot} 
+                                        onChange={e => updateLine(i, 'lot', e.target.value)} 
+                                        className="w-full bg-transparent outline-none text-sm dark:text-white border-b border-transparent focus:border-blue-500" 
+                                        placeholder="Scan Lot..." 
+                                        required // <--- Enforced here
+                                    />
                                 </div>
                                 <div className="col-span-2">
                                     <input type="date" value={line.expiry} onChange={e => updateLine(i, 'expiry', e.target.value)} className="w-full bg-transparent outline-none text-sm dark:text-white" />
@@ -1265,6 +1281,71 @@ const CreatePOModal = ({ onClose, onSubmit, suppliers, items }: any) => {
         </div>
     );
 };
+
+const ManageLotModal = ({ onClose, onSubmit, inventoryItem }: any) => {
+    const [lot, setLot] = useState(inventoryItem.lot_number || '');
+    const [expiry, setExpiry] = useState(inventoryItem.expiry_date || '');
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        onSubmit(inventoryItem.id, { lot_number: lot, expiry_date: expiry || null });
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in zoom-in">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 p-6 w-full max-w-sm">
+                <h2 className="text-lg font-bold mb-4 text-slate-800 dark:text-white">Manage Lot / Batch</h2>
+                <div className="mb-4 text-sm text-slate-500 dark:text-slate-400">
+                    Item: <span className="font-bold text-slate-700 dark:text-slate-200">{inventoryItem.item_sku}</span><br/>
+                    Location: <span className="font-mono">{inventoryItem.location_code}</span>
+                </div>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="text-[10px] uppercase font-bold text-slate-500">Lot Number</label>
+                        <input 
+                            value={lot} 
+                            onChange={e => setLot(e.target.value)} 
+                            placeholder="Scan or Enter Lot..." 
+                            className="w-full p-2 border rounded-lg dark:bg-slate-800 dark:border-slate-600 dark:text-white outline-none focus:ring-2 ring-blue-500" 
+                            autoFocus
+                        />
+                    </div>
+                    <div>
+                        <label className="text-[10px] uppercase font-bold text-slate-500">Expiry Date</label>
+                        <input 
+                            type="date" 
+                            value={expiry} 
+                            onChange={e => setExpiry(e.target.value)} 
+                            className="w-full p-2 border rounded-lg dark:bg-slate-800 dark:border-slate-600 dark:text-white outline-none" 
+                        />
+                    </div>
+                    <div className="flex justify-end gap-2 mt-6">
+                        <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">Cancel</button>
+                        <button type="submit" className="px-4 py-2 text-sm font-bold bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+const handleUpdateLot = async (id: number, data: any) => {
+      const res = await fetch(`${API_URL}/inventory/${id}/assign_lot/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Token ${token}` },
+          body: JSON.stringify(data)
+      });
+      
+      if (res.ok) {
+          addToast("Lot Updated Successfully", 'success');
+          setShowLotModal(false);
+          setEditingInventory(null);
+          fetchAll();
+      } else {
+          const err = await res.json();
+          addToast("Error: " + (err.error || "Failed"), 'error');
+      }
+  };
 
 const CreateMoveModal = ({ onClose, onSubmit, items, locations, inventory }: any) => {
     const [selectedSku, setSelectedSku] = useState('');
@@ -1457,6 +1538,8 @@ export default function App() {
   const [tabHistory, setTabHistory] = useState<string[]>([]);
   const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE' | 'RECEIVE' | 'MOVE' | 'REPLENISH'>('IDLE');
   const [toasts, setToasts] = useState<any[]>([]);
+  const [showLotModal, setShowLotModal] = useState(false);
+  const [editingInventory, setEditingInventory] = useState<InventoryItem | null>(null);
 
   // --- STATE ---
   const [showPOModal, setShowPOModal] = useState(false);
@@ -2230,6 +2313,7 @@ export default function App() {
       {showPOModal && <CreatePOModal suppliers={suppliers} items={items} onClose={()=>setShowPOModal(false)} onSubmit={handleCreatePO} />}
       {showReplenishModal && <CreateReplenishModal items={items} locations={locations} inventory={inventory} onClose={()=>setShowReplenishModal(false)} onSubmit={handleMoveSubmit}/>}
       {showMoveModal && <CreateMoveModal items={items} locations={locations} inventory={inventory} onClose={()=>setShowMoveModal(false)} onSubmit={handleMoveSubmit} />}
+      {showLotModal && editingInventory && <ManageLotModal inventoryItem={editingInventory} onClose={()=>setShowLotModal(false)} onSubmit={handleUpdateLot} />}
 
       <div className="w-full max-w-[1400px] h-[85vh] bg-white/60 dark:bg-slate-900/60 backdrop-blur-2xl rounded-[2rem] shadow-2xl border border-white/40 dark:border-white/10 flex flex-col relative overflow-hidden animate-in fade-in zoom-in duration-500 z-10">
         
@@ -3145,6 +3229,7 @@ export default function App() {
                                 </a>
                             </div>
 
+                            {/* CSV Import Button */}
                             <div className="relative">
                                 <input type="file" onChange={handleFileUpload} className="hidden" id="csv-upload" accept=".csv"/>
                                 <label htmlFor="csv-upload" className="bg-slate-700 text-white px-4 py-2 rounded-lg cursor-pointer flex items-center gap-2 hover:bg-slate-600 transition-colors shadow-md font-bold text-sm h-full">
@@ -3173,7 +3258,25 @@ export default function App() {
                                     <tr key={i.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/20 transition-colors">
                                         <td className="p-4 font-medium text-slate-700 dark:text-slate-200">{i.item_sku}</td>
                                         <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-300">{i.location_code}</td>
-                                        <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{i.lot_number || '-'}</td>
+                                        
+                                        {/* UPDATED: Lot Column with Edit Button */}
+                                        <td className="p-4">
+                                            <div className="flex items-center gap-2 font-mono text-xs text-slate-500 dark:text-slate-400">
+                                                <span>{i.lot_number || '-'}</span>
+                                                <button 
+                                                    onClick={(e) => { 
+                                                        e.stopPropagation();
+                                                        setEditingInventory(i); 
+                                                        setShowLotModal(true); 
+                                                    }}
+                                                    className="p-1 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-500 rounded-md transition-colors opacity-50 hover:opacity-100"
+                                                    title="Edit Lot/Expiry"
+                                                >
+                                                    <Edit size={12}/>
+                                                </button>
+                                            </div>
+                                        </td>
+
                                         <td className="p-4 font-mono text-xs text-slate-500 dark:text-slate-400">{i.expiry_date || '-'}</td>
                                         <td className="p-4">
                                             <span className={`px-2 py-1 rounded text-[10px] font-bold border ${
@@ -3192,6 +3295,7 @@ export default function App() {
                     </GlassCard>
                 </div>
             )}
+            
 
 
             {activeTab === 'Scanner' && (
@@ -3347,6 +3451,22 @@ function setShowLabel(arg0: boolean) {
 }
 
 function setCurrentZpl(zpl: string) {
+    throw new Error('Function not implemented.');
+}
+
+function addToast(arg0: string, arg1: string) {
+    throw new Error('Function not implemented.');
+}
+
+function setShowLotModal(arg0: boolean) {
+    throw new Error('Function not implemented.');
+}
+
+function setEditingInventory(arg0: null) {
+    throw new Error('Function not implemented.');
+}
+
+function fetchAll() {
     throw new Error('Function not implemented.');
 }
 // function addToast(arg0: string, arg1: string) {
