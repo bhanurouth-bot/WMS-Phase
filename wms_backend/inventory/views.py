@@ -192,8 +192,14 @@ class OrderViewSet(viewsets.ModelViewSet):
     def wave_plan(self, request):
         order_ids = request.data.get('order_ids', [])
         if not order_ids: return Response({'error': 'No order IDs provided'}, status=400)
-        task = generate_wave_plan_task.delay(order_ids)
-        return Response({"message": "Wave planning started.", "task_id": task.id, "status": "PROCESSING"}, status=202)
+        
+        # Execute synchronously to avoid Celery connection errors locally
+        result = InventoryService.generate_wave_plan(order_ids)
+        
+        if result.get('success'):
+            return Response(result, status=200)
+        else:
+            return Response(result, status=400)
 
     @action(detail=False, methods=['post'])
     def wave_complete(self, request):

@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 interface Supplier { id: number; name: string; contact_email: string; }
 import CursorAura from './CursorAura';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useScanDetection } from './hooks/useScanDetection';
 import Login from './Login';
 import MobilePicker from './MobilePicker';
@@ -457,7 +457,7 @@ const CreateRMAModal = ({ onClose, onSubmit, orders }: any) => {
 
 // --- UNIVERSAL SCANNER (VISUAL + FEFO + LOTS + GS1) ---
 
-const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack, onUpdate, onException }: any) => {
+const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack, onUpdate, onException, token }: any) => {
     const initialStep = mode === 'RECEIVE' ? 'SKU' : mode === 'MOVE' ? 'LOC' : 'LOC';
     const [step, setStep] = useState<'LOC' | 'SKU' | 'QTY' | 'DEST' | 'LOT' | 'EXPIRY' | 'LOT_SELECT' | 'LOT_VERIFY'>(initialStep);
     
@@ -488,10 +488,32 @@ const UniversalScanner = ({ mode, data, locations, inventory, onComplete, onBack
         const targetSku = activeItem.sku || activeItem.item_sku;
         const targetLoc = activeItem.location || activeItem.source_location;
 
+        // 1. Safety Check: Ensure token exists before making request
+        if (!token) {
+            console.error("UniversalScanner: Token is missing!");
+            alert("Authentication error. Please re-login.");
+            return;
+        }
+
         try {
-            const res = await fetch(`${API_URL}/inventory/?item__sku=${targetSku}&location_code=${targetLoc}`);
-            const invData: InventoryItem[] = await res.json();
+            const res = await fetch(`${API_URL}/inventory/?item__sku=${targetSku}&location_code=${targetLoc}`, {
+                headers: { 
+                    'Authorization': `Token ${token}`, 
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            // 2. Handle Session Expiry (401 Unauthorized)
+            if (res.status === 401) {
+                alert("Session Expired. Please re-login.");
+                return;
+            }
+
+            const data = await res.json();
             
+            // FIX: Handle Django Pagination (data.results)
+            const invData: InventoryItem[] = Array.isArray(data) ? data : (data.results || []);
+
             const sorted = invData.sort((a, b) => {
                 if (!a.expiry_date) return 1;
                 if (!b.expiry_date) return -1;
@@ -1009,7 +1031,8 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
                     alert("Label sent to printer!");
                 } catch (e) {
                     console.warn("Direct print failed, falling back to screen", e);
-                    onPrint(zpl); // Fallback to on-screen modal
+                    setCurrentZpl(zpl);
+                    setShowLabel(true); // Fallback to on-screen modal
                 }
                 
                 onComplete();
@@ -1122,6 +1145,30 @@ const PackingStationUI = ({ order, onBack, onComplete, onPrint }: { order: Order
     );
 }
 
+// --- TOAST COMPONENT ---
+const ToastContainer = ({ toasts, removeToast }: any) => (
+  <div className="fixed bottom-24 right-6 z-[100] flex flex-col gap-2 pointer-events-none">
+      <AnimatePresence>
+          {toasts.map((t: any) => (
+              <motion.div 
+                  key={t.id} 
+                  initial={{ opacity: 0, y: 20, scale: 0.9 }} 
+                  animate={{ opacity: 1, y: 0, scale: 1 }} 
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  className={`p-4 rounded-xl shadow-2xl border backdrop-blur-xl flex items-center gap-3 min-w-[300px] cursor-pointer pointer-events-auto ${
+                      t.type === 'error' ? 'bg-red-500/90 text-white border-red-400' : 
+                      t.type === 'success' ? 'bg-emerald-500/90 text-white border-emerald-400' : 
+                      'bg-slate-800/90 text-white border-slate-700'}`}
+                  onClick={() => removeToast(t.id)}
+              >
+                  {t.type === 'error' ? <AlertCircle size={20}/> : t.type === 'success' ? <CheckCircle2 size={20}/> : <Bell size={20}/>}
+                  <div className="text-sm font-bold">{t.message}</div>
+              </motion.div>
+          ))}
+      </AnimatePresence>
+  </div>
+);
+
 // --- MAIN APP ---
 
 export default function App() {
@@ -1131,6 +1178,13 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('Overview');
   const [tabHistory, setTabHistory] = useState<string[]>([]);
   const [scannerMode, setScannerMode] = useState<'IDLE' | 'CYCLE' | 'WAVE' | 'RECEIVE' | 'MOVE' | 'REPLENISH'>('IDLE');
+  const [toasts, setToasts] = useState<any[]>([]);
+
+  const addToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+      const id = Date.now();
+      setToasts(prev => [...prev, { id, message, type }]);
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  };
   
   // New Profile Menu State
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -1683,31 +1737,90 @@ export default function App() {
                         data={activeWave} 
                         locations={locations}
                         inventory={inventory}
+                        token={token}
                         onUpdate={handleWavePickSubmit} 
                         onException={handleScannerException}
                         onBack={() => setScannerMode('IDLE')}
-                        onComplete={() => { alert("Wave Complete!"); setScannerMode('IDLE'); setActiveWave(null); setSelectedOrders([]); fetchAll(); }} 
+                        onComplete={() => { 
+                            addToast("Wave Complete!", 'success'); // Using addToast
+                            setScannerMode('IDLE'); 
+                            setActiveWave(null); 
+                            setSelectedOrders([]); 
+                            fetchAll(); 
+                        }} 
                       />
                   )}
                   {scannerMode === 'CYCLE' && activeCount && (
-                      <UniversalScanner mode="CYCLE" data={activeCount} locations={locations} inventory={inventory} onUpdate={(item:any, qty:number) => handleCycleCountSubmit(item.id, qty)} onBack={() => setScannerMode('IDLE')}
-                        onComplete={() => { alert("Count Complete!"); setScannerMode('IDLE'); setActiveCount(null); fetchAll(); }} />
+                      <UniversalScanner 
+                        mode="CYCLE" 
+                        data={activeCount} 
+                        locations={locations} 
+                        inventory={inventory} 
+                        token={token}
+                        onUpdate={(item:any, qty:number) => handleCycleCountSubmit(item.id, qty)} 
+                        onBack={() => setScannerMode('IDLE')}
+                        onComplete={() => { 
+                            addToast("Count Complete!", 'success'); 
+                            setScannerMode('IDLE'); 
+                            setActiveCount(null); 
+                            fetchAll(); 
+                        }} 
+                      />
                   )}
                   {scannerMode === 'RECEIVE' && activePO && (
-                      <UniversalScanner mode="RECEIVE" data={activePO} locations={locations} inventory={inventory} onUpdate={(item:any, qty:number, loc: string, lot: string, exp: string) => handleReceiveSubmit(item, qty, loc, lot, exp)} onBack={() => setScannerMode('IDLE')}
-                        onComplete={() => { alert("Receiving Complete!"); setScannerMode('IDLE'); setActivePO(null); fetchAll(); }} />
+                      <UniversalScanner 
+                        mode="RECEIVE" 
+                        data={activePO} 
+                        locations={locations} 
+                        inventory={inventory} 
+                        token={token}
+                        onUpdate={(item:any, qty:number, loc: string, lot: string, exp: string) => handleReceiveSubmit(item, qty, loc, lot, exp)} 
+                        onBack={() => setScannerMode('IDLE')}
+                        onComplete={() => { 
+                            addToast("Receiving Complete!", 'success'); 
+                            setScannerMode('IDLE'); 
+                            setActivePO(null); 
+                            fetchAll(); 
+                        }} 
+                      />
                   )}
                   {scannerMode === 'MOVE' && (
-                      <UniversalScanner mode="MOVE" data={{reference:'Ad-Hoc Move'}} locations={locations} inventory={inventory} onUpdate={handleMoveSubmit} onBack={() => setScannerMode('IDLE')}
-                        onComplete={() => { setScannerMode('IDLE'); fetchAll(); }} />
+                      <UniversalScanner 
+                        mode="MOVE" 
+                        data={{reference:'Ad-Hoc Move'}} 
+                        locations={locations} 
+                        inventory={inventory} 
+                        token={token}
+                        onUpdate={handleMoveSubmit} 
+                        onBack={() => setScannerMode('IDLE')}
+                        onComplete={() => { 
+                            addToast("Move Complete!", 'success');
+                            setScannerMode('IDLE'); 
+                            fetchAll(); 
+                        }} 
+                      />
                   )}
                   {scannerMode === 'REPLENISH' && (
-                      <UniversalScanner mode="REPLENISH" data={replenishTasks} locations={locations} inventory={inventory} onUpdate={handleReplenishSubmit} onBack={()=>setScannerMode('IDLE')} onComplete={()=>{setScannerMode('IDLE'); fetchAll();}} />
+                      <UniversalScanner 
+                        mode="REPLENISH" 
+                        data={replenishTasks} 
+                        locations={locations} 
+                        inventory={inventory} 
+                        token={token}
+                        onUpdate={handleReplenishSubmit} 
+                        onBack={()=>setScannerMode('IDLE')} 
+                        onComplete={()=>{
+                            addToast("Replenishment Complete!", 'success');
+                            setScannerMode('IDLE'); 
+                            fetchAll();
+                        }} 
+                      />
                   )}
               </div>
           </div>
       );
   }
+
   const handleAddSupplier = async (e: React.FormEvent) => {
       e.preventDefault();
       const form = e.target as HTMLFormElement;
@@ -1787,6 +1900,8 @@ export default function App() {
         }
 
       `}</style>
+
+      <ToastContainer toasts={toasts} removeToast={(id: any) => setToasts(prev => prev.filter(t => t.id !== id))} />
 
       {darkMode && <CursorAura />}
 
@@ -2730,3 +2845,11 @@ export default function App() {
 function addToast(arg0: string, arg1: string) {
     throw new Error('Function not implemented.');
 }
+function setShowLabel(arg0: boolean) {
+    throw new Error('Function not implemented.');
+}
+
+function setCurrentZpl(zpl: string) {
+    throw new Error('Function not implemented.');
+}
+
